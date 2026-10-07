@@ -1,0 +1,175 @@
+"""FastAPI entry point: flow catalogue, run lifecycle, live event stream (SSE) and report downloads."""
+from __future__ import annotations
+
+import asyncio
+import hmac
+import json
+import time
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.config import settings
+from app.core import registry
+from app.core.events import store
+from app.flows.oracle_pg import flow as _flows  # noqa: F401  (registers the flows)
+from app.flows.oracle_pg.report import to_html, to_markdown
+from app.flows.oracle_pg.sandbox import cleanup_stale_schemas
+
+STATIC = Path(__file__).parent / "static"
+app = FastAPI(title="Agent Hub: Oracle to PostgreSQL", version="1.0")
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    n = cleanup_stale_schemas(settings.database_url)
+    if n:
+        print(f"cleaned {n} stale sandbox schema(s)")
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> FileResponse:
+    return FileResponse(STATIC / "index.html")
+
+
+@app.get("/healthz")
+def healthz() -> dict:
+    return {"ok": True, "time": time.time()}
+
+
+@app.get("/api/config")
+def config() -> dict:
+    return {
+        "llm_configured": bool(settings.anthropic_api_key),
+        "database_configured": bool(settings.database_url),
+        "access_code_required": bool(settings.access_code),
+        "models": {"converter": settings.model_converter, "reviewer": settings.model_reviewer},
+        "limits": {"upload_mb": settings.max_upload_bytes // (1024 * 1024), "max_statements": settings.max_statements,
+                   "max_repair_attempts": settings.max_repair_attempts},
+    }
+
+
+@app.get("/api/flows")
+def flows() -> list[dict]:
+    return [f.public() for f in registry.FLOWS.values()]
+
+
+@app.get("/api/sample")
+def sample_files() -> list[dict]:
+    root = settings.sample_app_dir
+    out = []
+    for p in sorted(root.rglob("*")):
+        if p.is_file() and p.suffix in (".java", ".xml", ".sql", ".md"):
+            out.append({"path": str(p.relative_to(root)), "content": p.read_text("utf-8")})
+    return out
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "?")
+
+
+@app.post("/api/runs")
+async def create_run(
+    request: Request,
+    flow_id: str = Form(...),
+    source: str = Form("sample"),
+    github_url: str = Form(""),
+    sql: str = Form(""),
+    schema_sql: str = Form(""),
+    access_code: str = Form(""),
+    file: UploadFile | None = File(None),
+) -> JSONResponse:
+    flow = registry.FLOWS.get(flow_id)
+    if flow is None:
+        raise HTTPException(404, "Unknown flow")
+    ip = _client_ip(request)
+    if store.active_count() >= settings.max_concurrent_runs:
+        raise HTTPException(429, "The server is busy with other runs. Try again in a minute.")
+    if store.recent_for_ip(ip) >= settings.runs_per_hour_per_ip:
+        raise HTTPException(429, "Run limit reached for this hour.")
+
+    inputs: dict = {"source": source, "github_url": github_url, "sql": sql, "schema_sql": schema_sql}
+    if flow_id == "oracle-java-migration" and source == "upload":
+        if file is None:
+            raise HTTPException(400, "Choose a .zip file to upload")
+        data = await file.read(settings.max_upload_bytes + 1)
+        if len(data) > settings.max_upload_bytes:
+            raise HTTPException(413, f"Upload is larger than {settings.max_upload_bytes // (1024 * 1024)} MB")
+        inputs["upload_bytes"], inputs["filename"] = data, file.filename or "upload.zip"
+    if flow_id == "oracle-java-migration" and source == "github" and not github_url.strip():
+        raise HTTPException(400, "Enter a GitHub repository URL")
+    if flow_id == "sql-snippet-converter" and not sql.strip():
+        raise HTTPException(400, "Paste an Oracle SQL statement or PL/SQL block")
+
+    # With an access code configured, only callers who know it can spend LLM budget; others still get the rules engine.
+    use_llm = True
+    if settings.access_code:
+        use_llm = hmac.compare_digest(access_code.encode(), settings.access_code.encode())
+
+    run = store.create(flow_id, ip)
+    run.emit("Platform", "AI assist: " + ("on" if use_llm and settings.anthropic_api_key else "off (rules-only run)"), "info")
+    registry.start(flow, run, inputs, use_llm=use_llm)
+    return JSONResponse({"run_id": run.id, "ai_assist": bool(use_llm and settings.anthropic_api_key)})
+
+
+def _run_or_404(run_id: str):
+    run = store.get(run_id)
+    if run is None:
+        raise HTTPException(404, "Run not found (runs are kept in memory and cleared on restart)")
+    return run
+
+
+@app.get("/api/runs/{run_id}")
+def run_status(run_id: str) -> dict:
+    r = _run_or_404(run_id)
+    return {**r.summary(), "has_result": r.result is not None, "event_count": len(r.events)}
+
+
+@app.get("/api/runs/{run_id}/events")
+async def run_events(run_id: str, request: Request, start: int = 0) -> StreamingResponse:
+    run = _run_or_404(run_id)
+
+    async def gen():
+        i, last_ping = start, time.time()
+        while True:
+            for e in run.events_since(i):
+                yield f"id: {e.seq}\ndata: {json.dumps(e.to_dict())}\n\n"
+                i = e.seq + 1
+            if run.status in ("done", "error") and not run.events_since(i):
+                yield f"event: end\ndata: {json.dumps({'status': run.status, 'error': run.error})}\n\n"
+                return
+            if await request.is_disconnected():
+                return
+            if time.time() - last_ping > 15:
+                yield ": ping\n\n"
+                last_ping = time.time()
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/runs/{run_id}/result")
+def run_result(run_id: str) -> JSONResponse:
+    r = _run_or_404(run_id)
+    if r.result is None:
+        raise HTTPException(409, "Run has not finished" if r.status in ("queued", "running") else (r.error or "No result"))
+    return JSONResponse(r.result)
+
+
+@app.get("/api/runs/{run_id}/report")
+def run_report(run_id: str, format: str = "html"):
+    r = _run_or_404(run_id)
+    if r.result is None:
+        raise HTTPException(409, "Run has not finished")
+    name = f"migration-report-{run_id}"
+    if format == "json":
+        return JSONResponse(r.result, headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
+    if format in ("md", "markdown"):
+        return PlainTextResponse(to_markdown(r.result), media_type="text/markdown",
+                                 headers={"Content-Disposition": f'attachment; filename="{name}.md"'})
+    return HTMLResponse(to_html(r.result), headers={"Content-Disposition": f'attachment; filename="{name}.html"'})

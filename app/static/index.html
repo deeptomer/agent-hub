@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Hub - Oracle to PostgreSQL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#edf0f3; --panel:#ffffff; --ink:#1d2733; --muted:#5b6877; --rule:#d3dae2; --rule-soft:#e5e9ee;
+  --ora:#a8402f; --ora-tint:#f8eeeb; --pg:#2d5f8e; --pg-tint:#e9f1f8;
+  --ok:#2c7a55; --warn:#a86b00; --bad:#b3261e; --info:#51606f;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:"Bricolage Grotesque",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --r:4px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+button,input,textarea,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--pg);outline-offset:2px}
+.app{display:grid;grid-template-columns:272px minmax(0,1fr);min-height:100vh}
+/* ---------- rail ---------- */
+.rail{background:var(--ink);color:#e8edf2;padding:28px 20px;display:flex;flex-direction:column;gap:28px;position:sticky;top:0;height:100vh}
+.brand{font-weight:700;font-size:22px;letter-spacing:-.01em;line-height:1.15}
+.brand small{display:block;font-weight:400;font-size:13.5px;color:#9fb0c1;margin-top:6px;letter-spacing:0}
+.flows{display:flex;flex-direction:column;gap:6px}
+.flow-btn{background:transparent;border:0;border-left:3px solid transparent;color:#cdd8e3;text-align:left;padding:10px 12px;border-radius:0 var(--r) var(--r) 0;cursor:pointer}
+.flow-btn b{display:block;font-weight:500;font-size:15.5px;color:#fff}
+.flow-btn span{display:block;font-size:13px;color:#9fb0c1;margin-top:2px;line-height:1.35}
+.flow-btn:hover{background:#273445}
+.flow-btn[aria-current="true"]{background:#2b3a4d;border-left-color:#7fb0e0}
+.status{margin-top:auto;font-size:13.5px;color:#9fb0c1;display:grid;gap:8px}
+.status div{display:flex;gap:8px;align-items:baseline}
+.dot{width:8px;height:8px;border-radius:50%;background:#6b7b8c;flex:none;transform:translateY(0)}
+.dot.on{background:#5fc596}.dot.off{background:#d99a3b}
+/* ---------- main ---------- */
+main{padding:32px clamp(18px,4vw,56px) 80px;max-width:1280px;width:100%}
+h1{font-size:clamp(26px,3.2vw,38px);line-height:1.1;margin:0 0 10px;letter-spacing:-.02em;font-weight:700}
+h2{font-size:20px;margin:0 0 12px;letter-spacing:-.01em;font-weight:700}
+h3{font-size:16px;margin:0 0 8px;font-weight:700}
+.lead{max-width:68ch;color:var(--muted);margin:0 0 20px}
+.agents{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0 0 22px;padding:0;list-style:none;font-size:14px;color:var(--muted)}
+.agents li{display:flex;gap:7px;align-items:baseline}
+.agents li::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c,#778);flex:none}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);padding:20px}
+.composer{display:grid;gap:16px}
+.field label,.field .lab{display:block;font-weight:500;margin-bottom:6px;font-size:14.5px}
+.field .hint{font-size:13px;color:var(--muted);margin-top:4px}
+input[type=text],textarea,input[type=password]{width:100%;padding:10px 12px;border:1px solid var(--rule);border-radius:var(--r);background:#fbfcfd}
+textarea{font-family:var(--mono);font-size:13px;min-height:150px;resize:vertical;line-height:1.5}
+.seg{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--rule);border-radius:var(--r);overflow:hidden;width:fit-content;max-width:100%}
+.seg label{margin:0;position:relative;font-weight:400}
+.seg input{position:absolute;opacity:0;inset:0;cursor:pointer}
+.seg span{display:block;padding:9px 14px;font-size:14.5px;border-right:1px solid var(--rule);background:#fbfcfd}
+.seg label:last-child span{border-right:0}
+.seg input:checked+span{background:var(--ink);color:#fff}
+.seg input:focus-visible+span{outline:2px solid var(--pg);outline-offset:-2px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+.chip{border:1px solid var(--rule);background:#fff;border-radius:99px;padding:3px 11px;font-size:13px;cursor:pointer}
+.chip:hover{border-color:var(--pg);color:var(--pg)}
+.chip[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.btn{background:var(--pg);color:#fff;border:0;border-radius:var(--r);padding:11px 20px;font-weight:500;cursor:pointer;font-size:15.5px}
+.btn:hover{background:#244f78}
+.btn[disabled]{opacity:.55;cursor:wait}
+.btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--rule)}
+.btn.ghost:hover{border-color:var(--pg);color:var(--pg)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.err{color:var(--bad);background:#fdeceb;border:1px solid #f0c3bf;padding:10px 12px;border-radius:var(--r);margin-top:12px}
+/* ---------- live log ---------- */
+.run{margin-top:26px;display:grid;gap:24px}
+.log{max-height:340px;overflow:auto;font-size:14px;border-top:1px solid var(--rule-soft)}
+.ev{display:grid;grid-template-columns:118px 1fr;gap:10px;padding:5px 0;border-bottom:1px solid var(--rule-soft)}
+.ev .ag{font-weight:500;font-size:13.5px;color:var(--c,#556)}
+.ev.lvl-ok .msg{color:var(--ok)}
+.ev.lvl-warn .msg{color:var(--warn)}
+.ev.lvl-error .msg{color:var(--bad)}
+.ev.lvl-stage .msg{font-weight:700}
+.bar{height:4px;background:var(--rule-soft);border-radius:3px;overflow:hidden;margin:10px 0}
+.bar i{display:block;height:100%;width:0;background:var(--pg);transition:width .25s}
+/* ---------- results ---------- */
+.summary{font-size:17px;max-width:72ch;margin:0 0 18px}
+.ribbon{display:flex;align-items:flex-end;gap:2px;height:64px;padding:0;margin:6px 0 8px}
+.tick{flex:1 1 0;min-width:3px;max-width:22px;border:0;padding:0;cursor:pointer;border-radius:1px 1px 0 0;background:var(--c);opacity:.9}
+.tick:hover,.tick[aria-selected="true"]{opacity:1;outline:2px solid var(--ink);outline-offset:1px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:1px;background:var(--c);margin-right:6px}
+.auto{--c:var(--ok)}.portable{--c:#8fb8a3}.review{--c:#d6a22b}.manual{--c:var(--bad)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:0;margin:22px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.fact{padding:14px 18px 14px 0}
+.fact b{font-size:26px;line-height:1.1;display:block;font-weight:700;letter-spacing:-.01em}
+.fact span{font-size:13.5px;color:var(--muted)}
+.effort{display:grid;gap:6px;margin-top:6px}
+.effort div{display:grid;grid-template-columns:78px 1fr 52px;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+.effort i{display:block;height:8px;background:var(--pg);border-radius:1px}
+.effort div:first-child i{background:#9aa7b5}
+.split{display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:20px;align-items:start}
+.list{border:1px solid var(--rule);background:var(--panel);border-radius:var(--r);max-height:760px;overflow:auto}
+.list-head{padding:12px;border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--panel);z-index:1}
+.item{display:block;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--rule-soft);border-left:4px solid var(--c);padding:9px 12px;cursor:pointer}
+.item:hover{background:#f6f8fa}
+.item[aria-current="true"]{background:var(--pg-tint)}
+.item b{display:block;font-weight:500;font-size:14.5px;overflow-wrap:anywhere}
+.item small{color:var(--muted);font-size:12.5px}
+.detail h2{margin-bottom:4px;overflow-wrap:anywhere}
+.meta{color:var(--muted);font-size:14px;margin-bottom:14px;display:flex;flex-wrap:wrap;gap:4px 16px}
+.tag{display:inline-block;border-radius:99px;padding:1px 10px;font-size:13px;background:var(--c);color:#fff}
+.diff{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
+.pane{border:1px solid var(--rule);border-top:3px solid var(--c);border-radius:var(--r);background:var(--panel);min-width:0}
+.pane.src{--c:var(--ora)}.pane.dst{--c:var(--pg)}
+.pane h3{margin:0;padding:8px 12px;font-size:14px;color:var(--c);border-bottom:1px solid var(--rule-soft)}
+.pane pre{margin:0;padding:12px;font:12.5px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
+.pane.src pre{background:var(--ora-tint)}.pane.dst pre{background:var(--pg-tint)}
+mark.oc{background:transparent;color:var(--ora);font-weight:500;text-decoration:underline wavy;text-underline-offset:3px;text-decoration-thickness:1px}
+.risk{border-left:4px solid var(--c);padding:6px 0 6px 12px;margin:10px 0}
+.risk b{font-weight:500}
+.risk .fix{color:var(--muted);font-size:14px}
+.risk.high{--c:var(--bad)}.risk.medium{--c:#d6a22b}.risk.low{--c:#8a97a5}
+ul.plain{margin:6px 0 0;padding-left:18px}
+ul.plain li{margin:3px 0}
+.vline{padding:8px 12px;border-radius:var(--r);font-size:14.5px;margin:8px 0;background:var(--rule-soft)}
+.vline.ok{background:#e5f3ec;color:#1f5d40}.vline.failed{background:#fdeceb;color:var(--bad)}.vline.inconclusive,.vline.skipped{background:#fff3da;color:#7a4e00}
+details.box{border:1px solid var(--rule);border-radius:var(--r);background:var(--panel);padding:10px 14px;margin:12px 0}
+details.box summary{cursor:pointer;font-weight:500}
+.finding{padding:8px 0;border-bottom:1px solid var(--rule-soft);font-size:14.5px}
+.finding:last-child{border:0}
+.finding .sev{display:inline-block;min-width:58px;font-weight:700;font-size:13px;color:var(--c)}
+.finding .high{--c:var(--bad)}.finding .medium{--c:var(--warn)}.finding .low,.finding .info{--c:var(--info)}
+.hidden{display:none!important}
+@media (max-width:980px){
+  .app{grid-template-columns:1fr}
+  .rail{position:static;height:auto;padding:18px}
+  .status{margin-top:0;grid-auto-flow:column;gap:18px}
+  .split,.diff{grid-template-columns:1fr}
+  .list{max-height:320px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail" aria-label="Flows">
+    <div class="brand">Agent Hub<small>Oracle to PostgreSQL migration agents</small></div>
+    <nav class="flows" id="flows" aria-label="Choose a flow"></nav>
+    <div class="status" id="status" aria-live="polite"></div>
+  </aside>
+
+  <main id="main">
+    <h1 id="flow-title">Loading</h1>
+    <p class="lead" id="flow-desc"></p>
+    <ul class="agents" id="agents"></ul>
+
+    <form class="panel composer" id="composer">
+      <div id="inputs"></div>
+      <div class="field hidden" id="code-field">
+        <label for="access_code">Access code for AI assist</label>
+        <input type="password" id="access_code" autocomplete="off">
+        <div class="hint">Leave empty to run with the rules engine only. Claude is used only when the code is correct.</div>
+      </div>
+      <div class="row"><button class="btn" id="run" type="submit">Run analysis</button><span class="hint" id="run-hint"></span></div>
+      <div class="err hidden" id="error" role="alert"></div>
+    </form>
+
+    <section class="run hidden" id="run-area" aria-label="Run">
+      <div class="panel">
+        <h2 id="run-title">Agents at work</h2>
+        <div class="bar" role="progressbar" aria-label="Progress"><i id="progress"></i></div>
+        <div class="log" id="log" aria-live="polite"></div>
+      </div>
+      <div id="results" class="hidden"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const AGENT_COLOR = { Platform:"#6b7b8c", Intake:"#6b7b8c", Discovery:"#7a5aa6", Security:"#b3261e", Converter:"#2d5f8e", Validator:"#2c7a55", "Risk Reviewer":"#a86b00", Report:"#1d2733" };
+const EXAMPLES = [
+  ["Paging with ROWNUM", "SELECT * FROM (\n  SELECT a.*, ROWNUM AS rn FROM (\n    SELECT customer_id, full_name, email FROM customers WHERE status_flag = 'A' ORDER BY full_name\n  ) a WHERE ROWNUM <= 50\n) WHERE rn > 40"],
+  ["Org chart (CONNECT BY)", "SELECT LEVEL AS depth,\n       LPAD(' ', 2 * (LEVEL - 1)) || e.full_name AS indented_name,\n       SYS_CONNECT_BY_PATH(e.full_name, ' > ') AS path\nFROM employees e\nSTART WITH e.manager_id IS NULL\nCONNECT BY PRIOR e.employee_id = e.manager_id\nORDER SIBLINGS BY e.full_name"],
+  ["Upsert (MERGE)", "MERGE INTO customers c\nUSING (SELECT ? AS customer_id, ? AS full_name, ? AS email FROM DUAL) src\nON (c.customer_id = src.customer_id)\nWHEN MATCHED THEN UPDATE SET c.full_name = src.full_name, c.email = src.email\nWHEN NOT MATCHED THEN INSERT (customer_id, full_name, email, created_on)\n  VALUES (src.customer_id, src.full_name, src.email, SYSDATE)"],
+  ["Empty-string trap", "SELECT order_id FROM orders WHERE notes IS NULL OR notes = ''"],
+  ["Pivot by quarter", "SELECT * FROM (\n  SELECT p.category, TO_CHAR(o.order_date, 'Q') AS qtr, i.quantity * i.unit_price AS rev\n  FROM orders o JOIN order_items i ON o.order_id = i.order_id JOIN products p ON p.product_id = i.product_id\n) PIVOT (SUM(rev) FOR qtr IN ('1' AS q1, '2' AS q2, '3' AS q3, '4' AS q4))"],
+  ["PL/SQL function", "CREATE OR REPLACE FUNCTION order_total(p_order_id IN NUMBER) RETURN NUMBER IS\n  v_total NUMBER(14,2);\nBEGIN\n  SELECT NVL(SUM(quantity * unit_price), 0) INTO v_total FROM order_items WHERE order_id = p_order_id;\n  RETURN v_total;\nEXCEPTION\n  WHEN NO_DATA_FOUND THEN RETURN 0;\nEND order_total;"],
+];
+const ORACLE_TOKENS = /(\bROWNUM\b|\bCONNECT\s+BY\b|\bSTART\s+WITH\b|\bPRIOR\b|\bNVL2?\b(?=\s*\()|\bDECODE\b(?=\s*\()|\bSYS(?:DATE|TIMESTAMP)\b|\bFROM\s+DUAL\b|\bMINUS\b|\bKEEP\s*\(|\bPIVOT\b|\bLISTAGG\b|\(\+\)|\b\w+\.(?:NEXTVAL|CURRVAL)\b|\bADD_MONTHS\b|\bMONTHS_BETWEEN\b|\bSYS_CONNECT_BY_PATH\b|\bORDER\s+SIBLINGS\s+BY\b|\bRAISE_APPLICATION_ERROR\b|\bPRAGMA\s+AUTONOMOUS_TRANSACTION\b|\bBULK\s+COLLECT\b|\bVARCHAR2\b|\bNUMBER\b(?=\s*[(,)\s])|\/\*\+[^*]*\*\/)/gi;
+
+let CONFIG = {}, FLOWS = [], current = null, report = null, es = null, selectedId = null, filter = "all", query = "";
+
+async function boot() {
+  [CONFIG, FLOWS] = await Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/flows").then(r => r.json())]);
+  renderStatus(); renderFlowButtons();
+  $("#code-field").classList.toggle("hidden", !CONFIG.access_code_required);
+  selectFlow(FLOWS[0].id);
+}
+function renderStatus() {
+  const llm = CONFIG.llm_configured, db = CONFIG.database_configured;
+  $("#status").innerHTML =
+    `<div><span class="dot ${llm ? "on" : "off"}"></span><span>${llm ? "Claude: " + esc(CONFIG.models.converter) : "Claude not configured: rules-only runs"}</span></div>` +
+    `<div><span class="dot ${db ? "on" : "off"}"></span><span>${db ? "PostgreSQL sandbox connected" : "No sandbox database: syntax-only checks"}</span></div>`;
+}
+function renderFlowButtons() {
+  $("#flows").innerHTML = FLOWS.map(f => `<button class="flow-btn" data-id="${f.id}"><b>${esc(f.title)}</b><span>${esc(f.tagline)}</span></button>`).join("");
+  $("#flows").onclick = e => { const b = e.target.closest(".flow-btn"); if (b) selectFlow(b.dataset.id); };
+}
+function selectFlow(id) {
+  current = FLOWS.find(f => f.id === id);
+  document.querySelectorAll(".flow-btn").forEach(b => b.setAttribute("aria-current", b.dataset.id === id));
+  $("#flow-title").textContent = current.title;
+  $("#flow-desc").textContent = current.description;
+  $("#agents").innerHTML = current.agents.map(a => `<li style="--c:${AGENT_COLOR[a.name] || "#778"}" title="${esc(a.role)}"><span><b>${esc(a.name)}</b> ${esc(a.role.split(";")[0].split(".")[0])}</span></li>`).join("");
+  renderInputs();
+  $("#run-area").classList.add("hidden"); $("#error").classList.add("hidden");
+  if (es) { es.close(); es = null; }
+}
+function renderInputs() {
+  const box = $("#inputs"); box.innerHTML = "";
+  box.style.display = "grid"; box.style.gap = "16px";
+  current.inputs.forEach(inp => {
+    const wrap = document.createElement("div"); wrap.className = "field"; wrap.dataset.name = inp.name;
+    if (inp.show_when) wrap.dataset.when = JSON.stringify(inp.show_when);
+    if (inp.type === "choice") {
+      wrap.innerHTML = `<span class="lab">${esc(inp.label)}</span><div class="seg" role="radiogroup">` +
+        inp.options.map(o => `<label><input type="radio" name="${inp.name}" value="${o.value}" ${o.value === inp.default ? "checked" : ""}><span>${esc(o.label)}</span></label>`).join("") + `</div>`;
+    } else if (inp.type === "file") {
+      wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="file" id="f_${inp.name}" name="${inp.name}" accept=".zip"><div class="hint">Up to ${CONFIG.limits.upload_mb} MB. Only Java, XML, SQL and config files are read; nothing is executed.</div>`;
+    } else if (inp.type === "textarea") {
+      const ex = inp.name === "sql" ? `<div class="chips" id="examples">${EXAMPLES.map((e, i) => `<button type="button" class="chip" data-i="${i}">${esc(e[0])}</button>`).join("")}</div>` : "";
+      wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label>${ex}<textarea id="f_${inp.name}" name="${inp.name}" placeholder="${esc(inp.placeholder || "")}" ${inp.optional ? "" : "required"}></textarea>`;
+    } else {
+      wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="text" id="f_${inp.name}" name="${inp.name}" placeholder="${esc(inp.placeholder || "")}">`;
+    }
+    box.appendChild(wrap);
+  });
+  box.onchange = applyVisibility;
+  box.onclick = e => { const c = e.target.closest(".chip"); if (c) { $("#f_sql").value = EXAMPLES[+c.dataset.i][1]; } };
+  applyVisibility();
+  $("#run-hint").textContent = current.id === "oracle-java-migration" ? "The bundled sample runs in seconds." : "Validated on a real PostgreSQL sandbox.";
+}
+function applyVisibility() {
+  const vals = {};
+  document.querySelectorAll("#inputs input[type=radio]:checked").forEach(r => vals[r.name] = r.value);
+  document.querySelectorAll("#inputs .field").forEach(f => {
+    if (!f.dataset.when) return;
+    const cond = JSON.parse(f.dataset.when);
+    f.classList.toggle("hidden", !Object.entries(cond).every(([k, v]) => vals[k] === v));
+  });
+}
+$("#composer").addEventListener("submit", async e => {
+  e.preventDefault();
+  const fd = new FormData(); fd.append("flow_id", current.id);
+  document.querySelectorAll("#inputs .field:not(.hidden)").forEach(f => {
+    f.querySelectorAll("input,textarea").forEach(el => {
+      if (el.type === "radio") { if (el.checked) fd.append(el.name, el.value); }
+      else if (el.type === "file") { if (el.files[0]) fd.append("file", el.files[0]); }
+      else fd.append(el.name, el.value);
+    });
+  });
+  fd.append("access_code", $("#access_code").value);
+  $("#error").classList.add("hidden"); $("#run").disabled = true;
+  try {
+    const r = await fetch("/api/runs", { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || "The run could not be started");
+    startStream(j.run_id);
+  } catch (err) { showError(err.message); $("#run").disabled = false; }
+});
+function showError(m) { const e = $("#error"); e.textContent = m; e.classList.remove("hidden"); }
+
+function startStream(runId) {
+  report = null; selectedId = null;
+  $("#run-area").classList.remove("hidden"); $("#results").classList.add("hidden"); $("#results").innerHTML = "";
+  $("#log").innerHTML = ""; $("#progress").style.width = "4%"; $("#run-title").textContent = "Agents at work";
+  $("#run-area").scrollIntoView({ block: "start" });
+  es = new EventSource(`/api/runs/${runId}/events`);
+  es.onmessage = m => addEvent(JSON.parse(m.data));
+  es.addEventListener("end", async m => {
+    es.close(); es = null; $("#run").disabled = false;
+    const end = JSON.parse(m.data);
+    if (end.status === "error") { showError(end.error || "The run failed"); $("#progress").style.width = "100%"; return; }
+    $("#progress").style.width = "100%"; $("#run-title").textContent = "Agents finished";
+    report = await fetch(`/api/runs/${runId}/result`).then(r => r.json()); report._runId = runId;
+    renderReport();
+  });
+  es.onerror = () => { if (es && es.readyState === 2) { $("#run").disabled = false; } };
+}
+function addEvent(ev) {
+  if (ev.data && ev.data.progress) { const [d, t] = ev.data.progress; $("#progress").style.width = (8 + 88 * d / t) + "%"; return; }
+  const log = $("#log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  const d = document.createElement("div"); d.className = `ev lvl-${ev.level}`;
+  d.innerHTML = `<span class="ag" style="--c:${AGENT_COLOR[ev.agent] || "#556"}">${esc(ev.agent)}</span><span class="msg">${esc(ev.message)}</span>`;
+  log.appendChild(d); if (atEnd) log.scrollTop = log.scrollHeight;
+}
+
+/* ---------------- results ---------------- */
+const STATUS_LABEL = { auto: "Converted and validated", portable: "Portable as-is", review: "Needs review", manual: "Needs manual work" };
+function renderReport() {
+  const s = report.summary, m = report.meta, st = report.statements;
+  const ver = s.validation || {};
+  const validated = (ver.ok || 0) + (ver.inconclusive || 0);
+  const e = s.effort, max = Math.max(e.baseline_hours, 0.1);
+  const high = (s.risks || {}).high || 0;
+  const dl = f => `/api/runs/${report._runId}/report?format=${f}`;
+  const ticks = st.map(x => `<button class="tick ${x.status}" style="height:${Math.max(18, Math.round(x.confidence * 100))}%" data-id="${x.id}" aria-label="${esc(x.label)}: ${STATUS_LABEL[x.status] || x.status}" title="${esc(x.label)}"></button>`).join("");
+  const fnd = report.findings.length ? `<details class="box" ${report.findings.some(f => f.severity === "high") ? "open" : ""}><summary>Security and application findings (${report.findings.length})</summary>` +
+    report.findings.map(f => `<div class="finding"><span class="sev ${f.severity}">${esc(f.severity)}</span> ${esc(f.category)} <code>${esc(f.file)}:${f.line}</code><div>${esc(f.detail)}</div></div>`).join("") + `</details>` : "";
+  $("#results").innerHTML = `
+    <div class="panel">
+      <p class="summary">${esc(report.executive_summary)}</p>
+      <div class="ribbon" id="ribbon" role="listbox" aria-label="Statements">${ticks}</div>
+      <div class="legend"><span class="auto">${s.by_status.auto || 0} converted and validated</span><span class="portable">${s.by_status.portable || 0} portable</span><span class="review">${s.by_status.review || 0} to review</span><span class="manual">${s.by_status.manual || 0} manual</span><span style="--c:transparent">taller tick = higher confidence</span></div>
+      <div class="facts">
+        <div class="fact"><b>${validated} of ${s.statements}</b><span>${m.sandbox.mode === "postgres" ? "planned on PostgreSQL " + esc(String(m.sandbox.version || "").split(" ")[0]) : "syntax-checked (no live database)"}</span></div>
+        <div class="fact"><b>${high}</b><span>high-severity risks a passing plan would not catch</span></div>
+        <div class="fact"><b>${s.auto_rate_pct}%</b><span>converted without manual rework</span></div>
+        <div class="fact"><b>${e.saved_hours} h</b><span>estimated saving (planning assumptions)</span>
+          <div class="effort"><div><span>By hand</span><i style="width:100%"></i><span>${e.baseline_hours} h</span></div><div><span>With tool</span><i style="width:${Math.round(100 * e.assisted_hours / max)}%"></i><span>${e.assisted_hours} h</span></div></div></div>
+      </div>
+      <div class="row"><a class="btn ghost" href="${dl("html")}">Download report (HTML)</a><a class="btn ghost" href="${dl("md")}">Markdown</a><a class="btn ghost" href="${dl("json")}">JSON</a>
+        <span class="hint">${m.llm.available ? "Claude calls: " + m.llm.usage.calls + ", tokens in/out " + m.llm.usage.input_tokens + "/" + m.llm.usage.output_tokens : "Rules-only run (no Claude calls)"} | ${m.duration_s}s</span></div>
+    </div>
+    ${fnd}
+    <div class="split" style="margin-top:20px">
+      <div class="list"><div class="list-head"><div class="chips" id="filters">${["all", "auto", "review", "manual", "portable"].map(k => `<button type="button" class="chip" data-k="${k}" aria-pressed="${k === "all"}">${k === "all" ? "All" : STATUS_LABEL[k].split(" ")[0] === "Converted" ? "Converted" : STATUS_LABEL[k].replace("Needs ", "").replace("Portable as-is", "Portable")}</button>`).join("")}</div><input type="text" id="q" placeholder="Search by name or file" aria-label="Search statements"></div><div id="items"></div></div>
+      <div class="detail" id="detail"></div>
+    </div>
+    <details class="box"><summary>Migration checklist for the rest of the application</summary><ul class="plain">${report.checklist.map(c => `<li>${esc(c)}</li>`).join("")}</ul></details>`;
+  $("#results").classList.remove("hidden");
+  $("#ribbon").onclick = e => { const t = e.target.closest(".tick"); if (t) select(t.dataset.id, true); };
+  $("#filters").onclick = e => { const c = e.target.closest(".chip"); if (!c) return; filter = c.dataset.k; document.querySelectorAll("#filters .chip").forEach(x => x.setAttribute("aria-pressed", x === c)); renderItems(); };
+  $("#q").oninput = e => { query = e.target.value.toLowerCase(); renderItems(); };
+  filter = "all"; query = "";
+  renderItems();
+  const first = st.find(x => x.status === "manual") || st.find(x => x.status === "review") || st[0];
+  if (first) select(first.id, false);
+}
+function renderItems() {
+  const items = report.statements.filter(x => (filter === "all" || x.status === filter) && (!query || (x.label + " " + x.file).toLowerCase().includes(query)));
+  $("#items").innerHTML = items.map(x => `<button class="item ${x.status}" data-id="${x.id}" aria-current="${x.id === selectedId}"><b>${esc(x.label)}</b><small>${esc(x.kind)} | ${esc(x.file.split("/").pop())}:${x.line} | ${Math.round(x.confidence * 100)}%</small></button>`).join("") || `<div class="item" style="border-left-color:transparent"><small>No statements match this filter.</small></div>`;
+  $("#items").onclick = e => { const b = e.target.closest(".item[data-id]"); if (b) select(b.dataset.id, false); };
+}
+function hl(sql) { return esc(sql).replace(ORACLE_TOKENS, m => `<mark class="oc">${m}</mark>`); }
+function select(id, scroll) {
+  selectedId = id;
+  const x = report.statements.find(s => s.id === id); if (!x) return;
+  document.querySelectorAll(".tick").forEach(t => t.setAttribute("aria-selected", t.dataset.id === id));
+  document.querySelectorAll("#items .item").forEach(t => t.setAttribute("aria-current", t.dataset.id === id));
+  const v = x.validation || {};
+  const vtxt = { ok: v.mode === "postgres" ? "Plans successfully on PostgreSQL" : "Syntax valid (no live PostgreSQL)", inconclusive: "Parses on PostgreSQL; a bind-parameter type could not be inferred", skipped: "Not planned", failed: "Failed validation", pending: "Pending" }[v.status] || v.status;
+  $("#detail").innerHTML = `
+    <h2>${esc(x.label)}</h2>
+    <div class="meta"><span class="tag ${x.status}">${STATUS_LABEL[x.status] || x.status}</span><span>${esc(x.kind)}</span><span><code>${esc(x.file)}:${x.line}</code></span><span>method: ${esc(x.method)}</span><span>confidence ${Math.round(x.confidence * 100)}%</span><span>about ${x.effort_min} min of human time</span></div>
+    <div class="vline ${esc(v.status)}">${esc(vtxt)}${v.error ? ": " + esc(v.error) : ""}</div>
+    <div class="diff">
+      <div class="pane src"><h3>Oracle${x.constructs.length ? " (" + x.constructs.length + " Oracle-specific construct" + (x.constructs.length > 1 ? "s" : "") + ")" : ""}</h3><pre>${hl(x.oracle_sql)}</pre></div>
+      <div class="pane dst"><h3>PostgreSQL</h3><pre>${x.pg_sql ? esc(x.pg_sql) : "Not converted. " + (v.error ? esc(v.error) : "")}</pre></div>
+    </div>
+    ${x.notes.length ? `<h3>What changed</h3><ul class="plain">${x.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+    ${x.llm_explanation ? `<h3 style="margin-top:14px">Claude's explanation</h3><p>${esc(x.llm_explanation)}</p>` : ""}
+    ${x.meta && x.meta.llm_manual_review ? `<div class="vline skipped">Claude asks for manual review: ${esc(x.meta.llm_manual_review)}</div>` : ""}
+    <h3 style="margin-top:16px">Behaviour differences to check${x.risks.length ? " (" + x.risks.length + ")" : ""}</h3>
+    ${x.risks.map(r => `<div class="risk ${r.severity}"><b>${esc(r.category)}</b> <span class="hint">${esc(r.severity)}${r.source === "llm" ? ", found by Claude" : ""}</span><div>${esc(r.message)}</div>${r.suggestion ? `<div class="fix">Fix: ${esc(r.suggestion)}</div>` : ""}</div>`).join("") || `<p class="hint">None found for this statement.</p>`}`;
+  if (scroll) $("#detail").scrollIntoView({ block: "start", behavior: "smooth" });
+}
+boot();
+</script>
+</body>
+</html>
