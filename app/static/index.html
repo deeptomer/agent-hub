@@ -177,7 +177,7 @@ details.box summary{cursor:pointer;font-weight:500}
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const AGENT_COLOR = { Platform:"#6b7b8c", Intake:"#6b7b8c", Discovery:"#7a5aa6", Security:"#b3261e", Converter:"#2d5f8e", Validator:"#2c7a55", "Risk Reviewer":"#a86b00", Report:"#1d2733" };
+const AGENT_COLOR = { Platform:"#6b7b8c", Intake:"#6b7b8c", Discovery:"#7a5aa6", "Code Reader":"#5b6fa6", Security:"#b3261e", Converter:"#2d5f8e", Validator:"#2c7a55", "Risk Reviewer":"#a86b00", Report:"#1d2733" };
 const EXAMPLES = [
   ["Paging with ROWNUM", "SELECT * FROM (\n  SELECT a.*, ROWNUM AS rn FROM (\n    SELECT customer_id, full_name, email FROM customers WHERE status_flag = 'A' ORDER BY full_name\n  ) a WHERE ROWNUM <= 50\n) WHERE rn > 40"],
   ["Org chart (CONNECT BY)", "SELECT LEVEL AS depth,\n       LPAD(' ', 2 * (LEVEL - 1)) || e.full_name AS indented_name,\n       SYS_CONNECT_BY_PATH(e.full_name, ' > ') AS path\nFROM employees e\nSTART WITH e.manager_id IS NULL\nCONNECT BY PRIOR e.employee_id = e.manager_id\nORDER SIBLINGS BY e.full_name"],
@@ -307,6 +307,13 @@ function renderReport() {
   const ticks = st.map(x => `<button class="tick ${x.status}" style="height:${Math.max(18, Math.round(x.confidence * 100))}%" data-id="${x.id}" aria-label="${esc(x.label)}: ${STATUS_LABEL[x.status] || x.status}" title="${esc(x.label)}"></button>`).join("");
   const fnd = report.findings.length ? `<details class="box" ${report.findings.some(f => f.severity === "high") ? "open" : ""}><summary>Security and application findings (${report.findings.length})</summary>` +
     report.findings.map(f => `<div class="finding"><span class="sev ${f.severity}">${esc(f.severity)}</span> ${esc(f.category)} <code>${esc(f.file)}:${f.line}</code><div>${esc(f.detail)}</div></div>`).join("") + `</details>` : "";
+  const prof = (m.files || {}).profile, rd = (m.files || {}).reader;
+  const profBox = prof ? `<details class="box" open><summary>Project profile (Code Reader)</summary>
+      <p class="hint">Build tool: ${esc(prof.build_tool)} | ${m.files.java || 0} Java, ${m.files.xml || 0} XML, ${m.files.sql || 0} SQL files</p>
+      <div class="chips">${prof.frameworks.map(f => `<span class="chip">${esc(f.name)} (${f.files})</span>`).join("") || `<span class="hint">No data-access framework detected</span>`}</div>
+      ${rd && rd.gap_fragments ? `<p>${rd.gap_fragments} SQL-looking string(s) in ${rd.gap_files} file(s) were not whole statements in the code. ${rd.used_llm ? `Claude reconstructed ${rd.reconstructed}${rd.rejected ? ` and ${rd.rejected} were rejected as not matching the file` : ""}.` : "Run with Claude enabled to reconstruct them; they are listed under findings."}</p>` : `<p class="hint">Every SQL string in the code was extracted as a statement.</p>`}
+      ${prof.sql_by_file.length ? `<p class="hint">Most SQL: ${prof.sql_by_file.slice(0, 4).map(f => esc(f.file.split("/").pop()) + " (" + f.statements + ")").join(", ")}</p>` : ""}
+    </details>` : "";
   $("#results").innerHTML = `
     <div class="panel">
       <p class="summary">${esc(report.executive_summary)}</p>
@@ -322,6 +329,7 @@ function renderReport() {
       <div class="row"><a class="btn ghost" href="${dl("html")}">Download report (HTML)</a><a class="btn ghost" href="${dl("md")}">Markdown</a><a class="btn ghost" href="${dl("json")}">JSON</a>
         <span class="hint">${m.llm.available ? "Claude calls: " + m.llm.usage.calls + ", tokens in/out " + m.llm.usage.input_tokens + "/" + m.llm.usage.output_tokens : "Rules-only run (no Claude calls)"} | ${m.duration_s}s</span></div>
     </div>
+    ${profBox}
     ${fnd}
     <div class="split" style="margin-top:20px">
       <div class="list"><div class="list-head"><div class="chips" id="filters">${["all", "auto", "review", "manual", "portable"].map(k => `<button type="button" class="chip" data-k="${k}" aria-pressed="${k === "all"}">${k === "all" ? "All" : STATUS_LABEL[k].split(" ")[0] === "Converted" ? "Converted" : STATUS_LABEL[k].replace("Needs ", "").replace("Portable as-is", "Portable")}</button>`).join("")}</div><input type="text" id="q" placeholder="Search by name or file" aria-label="Search statements"></div><div id="items"></div></div>

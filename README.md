@@ -4,8 +4,8 @@ A small platform that hosts several agent *flows*. The first flow migrates the S
 from Oracle to PostgreSQL; the second converts a single pasted statement.
 
 ## How the migration flow works
-1. **Intake** – sample app, uploaded zip (allow-listed files only) or a public GitHub URL.
-2. **Discover** – finds SQL in JDBC string code, MyBatis XML, JPA native queries, .sql and PL/SQL, plus app-level findings (driver, dialect, credentials).
+1. **Intake** – a new project (uploaded zip with allow-listed files only, or a public GitHub URL) or one of two bundled demo apps.
+2. **Discover + Code Reader** – finds SQL in JDBC string code, MyBatis XML, JPA native queries, .sql and PL/SQL, plus app-level findings (driver, dialect, credentials). The Code Reader profiles the project (build tool, frameworks) and flags SQL strings the extractor could not assemble (StringBuilder chains, String.format, helper methods). With Claude enabled it reads only those files and reconstructs the statements; each reconstruction must use names that really occur in the file, is marked as a risk, and runtime parts are planned with a placeholder and never reported better than 'inconclusive'.
 3. **Rules engine** – sqlglot plus custom rewrites (ROWNUM paging, (+) joins, sequences, SYSDATE, date arithmetic, MERGE casts…). Deterministic and free.
 4. **Claude agent** – only for what rules cannot do (CONNECT BY, KEEP DENSE_RANK, PIVOT, PL/SQL packages). Forced JSON tool output.
 5. **Validate** – every result runs on a real PostgreSQL sandbox (EXPLAIN only, rolled back, per-run schema). Errors go back to Claude for up to 2 repairs.

@@ -51,6 +51,12 @@ def assess(stmt: Stmt) -> list[Risk]:
         add("DECODE NULL semantics", "medium",
             "DECODE treats NULL = NULL as a match; the CASE expression it becomes does not.",
             "Add explicit IS NULL branches where the original relied on NULL matching.")
+    if stmt.meta.get("reader") == "llm":
+        add("Reconstructed from Java code by Claude", "medium",
+            "This statement is assembled at runtime in the Java code; Claude rebuilt the full text from the file"
+            + (f" ({stmt.meta['reader_note']})" if stmt.meta.get("reader_note") else "")
+            + ". Optional clauses may be missing or ordered differently from the real code paths.",
+            "Compare against the Java method and test each branch (optional filters, sort columns) after migration.")
     if stmt.dynamic or stmt.meta.get("raw_substitution"):
         add("Dynamic SQL", "high",
             "The statement is assembled from string concatenation or ${} substitution, so it cannot be fully validated "

@@ -224,6 +224,10 @@ def _from_java(path: Path, rel: str, src: str, counter: Callable[[], str]) -> li
             kind = "jpql"
         elif jpa_kind == "native" or re.search(r"createNativeQuery\s*\(\s*$", before):
             kind = "jpa_native" if kind == "jdbc" else kind
+        if re.search(r"(String\.format|\.formatted)\s*\(\s*$", before) and re.search(r"%[sd]", sql):
+            sql, unresolved = _resolve_format(sql, src, g["end"])
+            if unresolved:
+                g = {**g, "dynamic": True, "dyn": g["dyn"] + unresolved}
         m = re.search(r"(\w+)\s*=\s*$", before)
         const = m.group(1) if m else None
         method = jpa_method or _enclosing_method(src, g["start"])
@@ -234,6 +238,28 @@ def _from_java(path: Path, rel: str, src: str, counter: Callable[[], str]) -> li
             stmt.meta["dynamic_vars"] = g["dyn"]
         out.append(stmt)
     return out
+
+
+_FMT_ARGS = re.compile(r"\s*,\s*([^;]*?)\)\s*[;.)]")
+
+
+def _resolve_format(sql: str, src: str, end: int) -> tuple[str, list[str]]:
+    """String.format("... %s ...", CONST): substitute string constants declared in the same file; mark the rest dynamic."""
+    unresolved: list[str] = []
+    m = _FMT_ARGS.match(src, end)
+    args = [a.strip() for a in m.group(1).split(",")] if m else []
+    it = iter(args)
+
+    def sub(_: re.Match) -> str:
+        arg = next(it, "")
+        cm = re.search(r"\bString\s+" + re.escape(arg) + r"\s*=\s*\"([^\"]*)\"\s*;", src) if re.fullmatch(r"\w+", arg or "") else None
+        if cm:
+            return cm.group(1)
+        name = re.sub(r"\W", "", arg) or "fmt"
+        unresolved.append(name)
+        return f" __DYN_{name}__ "
+
+    return re.sub(r"%[sd]", sub, sql), unresolved
 
 
 def _flatten(el, fragments: dict, dyn_flag: list[bool]) -> str:
