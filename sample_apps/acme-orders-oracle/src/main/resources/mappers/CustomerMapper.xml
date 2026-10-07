@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.acme.orders.mapper.CustomerMapper">
+
+  <!-- Oracle sequence used for key generation -->
+  <insert id="insertCustomer" parameterType="Customer">
+    <selectKey keyProperty="customerId" resultType="long" order="BEFORE">
+      SELECT SEQ_CUSTOMER_ID.NEXTVAL FROM DUAL
+    </selectKey>
+    INSERT INTO CUSTOMERS (CUSTOMER_ID, FULL_NAME, EMAIL, PHONE, REGION_CODE, CREDIT_LIMIT, CREATED_ON)
+    VALUES (#{customerId}, #{fullName}, #{email}, #{phone}, #{regionCode}, NVL(#{creditLimit}, 0), SYSDATE)
+  </insert>
+
+  <!-- Oracle-style outer join with (+) and DECODE -->
+  <select id="findCustomersWithRegion" resultType="map">
+    SELECT c.CUSTOMER_ID,
+           c.FULL_NAME,
+           r.REGION_NAME,
+           DECODE(c.STATUS_FLAG, 'A', 'Active', 'S', 'Suspended', 'Closed') AS STATUS_TEXT
+    FROM CUSTOMERS c, REGIONS r
+    WHERE c.REGION_CODE = r.REGION_CODE(+)
+    <if test="regionCode != null">
+      AND c.REGION_CODE = #{regionCode}
+    </if>
+    ORDER BY c.FULL_NAME
+  </select>
+
+  <!-- Oracle pagination via ROWNUM with two nested levels -->
+  <select id="pageCustomers" resultType="Customer">
+    SELECT * FROM (
+      SELECT a.*, ROWNUM AS RN FROM (
+        SELECT CUSTOMER_ID, FULL_NAME, EMAIL, REGION_CODE
+        FROM CUSTOMERS
+        WHERE STATUS_FLAG = 'A'
+        ORDER BY FULL_NAME
+      ) a
+      WHERE ROWNUM &lt;= #{endRow}
+    )
+    WHERE RN &gt; #{startRow}
+  </select>
+
+  <!-- Oracle: TRUNC(date), SYSDATE arithmetic, NVL on a timestamp -->
+  <select id="findInactiveCustomers" resultType="Customer">
+    SELECT CUSTOMER_ID, FULL_NAME, EMAIL
+    FROM CUSTOMERS
+    WHERE NVL(LAST_LOGIN, CREATED_ON) &lt; TRUNC(SYSDATE) - #{inactiveDays}
+  </select>
+
+  <!-- Oracle: ROWNUM with ORDER BY applied in the wrong order (classic bug) -->
+  <select id="topSpenders" resultType="map">
+    SELECT c.CUSTOMER_ID, c.FULL_NAME, SUM(o.TOTAL_AMOUNT) AS SPEND
+    FROM CUSTOMERS c JOIN ORDERS o ON o.CUSTOMER_ID = c.CUSTOMER_ID
+    WHERE ROWNUM &lt;= 5
+    GROUP BY c.CUSTOMER_ID, c.FULL_NAME
+    ORDER BY SPEND DESC
+  </select>
+
+</mapper>
