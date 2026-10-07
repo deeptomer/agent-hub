@@ -13,7 +13,7 @@ from langgraph.graph import END, StateGraph
 from app.config import settings
 from app.core.registry import FlowDef, RunContext, register
 from app.core.security import Finding, UnsafeInput, fetch_github_zip, safe_extract_zip
-from app.flows.oracle_pg import extract
+from app.flows.oracle_pg import extract, reader
 from app.flows.oracle_pg.constructs import detect, tier_for
 from app.flows.oracle_pg.llm_agents import review_with_llm, summarise_with_llm
 from app.flows.oracle_pg.models import Stmt
@@ -123,6 +123,9 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
             if src == "sample":
                 root, name = settings.sample_app_dir, "Acme Orders (synthetic Oracle demo app)"
                 ctx.emit("Intake", "Using the bundled synthetic Oracle sample application", "info")
+            elif src == "sample2":
+                root, name = settings.sample_app_dir.parent / "hr-reports-oracle", "HR Reports (synthetic app that builds SQL in code)"
+                ctx.emit("Intake", "Using the second bundled project, where SQL is assembled with StringBuilder and String.format", "info")
             else:
                 dest = ctx.workdir / "src"
                 try:
@@ -146,6 +149,8 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
             stmts, findings, stats = extract.discover(state["root"], lambda a, m, l="info", **d: ctx.emit(a, m, l, **d),
                                                        settings.max_statements)
             from collections import Counter
+            ctx.emit("Code Reader", "Profiling the project and looking for SQL assembled in code", "stage")
+            stmts = reader.run_reader(state["root"], stmts, findings, stats, ctx.llm, lambda a, m, l="info", **d: ctx.emit(a, m, l, **d))
             kinds = Counter(s.kind for s in stmts)
             ctx.emit("Discovery", f"Found {len(stmts)} statements ({', '.join(f'{v} {k}' for k, v in kinds.items())})", "ok",
                      kinds=dict(kinds))
@@ -281,7 +286,8 @@ def run_snippet(ctx: RunContext) -> dict[str, Any]:
 
 # ------------------------------------------------------------------------------------------- registration
 AGENTS = [
-    {"name": "Discovery", "role": "Finds every SQL statement in Java, MyBatis XML, JPA and .sql files; tags Oracle constructs; scans for prompt injection and unsafe SQL."},
+    {"name": "Discovery", "role": "Finds every SQL statement in Java, MyBatis XML, JPA and SQL files; tags Oracle constructs; scans for prompt injection and unsafe SQL."},
+    {"name": "Code Reader", "role": "Profiles a new Java project (frameworks, build tool, where the SQL lives) and has Claude reconstruct SQL that the code assembles at runtime (StringBuilder chains, string formatting, helper methods)."},
     {"name": "Converter", "role": "Rules engine (sqlglot + custom rewrites) first; Claude only for what the rules cannot do; repair loop on validator errors."},
     {"name": "Validator", "role": "Plans every converted statement on a real PostgreSQL sandbox (EXPLAIN only, rolled back, time-limited)."},
     {"name": "Risk Reviewer", "role": "Flags semantic differences that still run: '' vs NULL, ROWNUM order, DATE time part, concat NULLs, transactions."},
@@ -296,10 +302,11 @@ register(FlowDef(
                 "rules + Claude pipeline, validates on a real PostgreSQL sandbox, and reports what still needs a human.",
     agents=AGENTS,
     inputs=[
-        {"name": "source", "type": "choice", "label": "Source", "default": "sample",
-         "options": [{"value": "sample", "label": "Bundled sample app (synthetic Oracle code)"},
-                     {"value": "upload", "label": "Upload a .zip of your repo"},
-                     {"value": "github", "label": "Public GitHub repository URL"}]},
+        {"name": "source", "type": "choice", "label": "Which application?", "default": "sample",
+         "options": [{"value": "upload", "label": "New project: upload a .zip"},
+                     {"value": "github", "label": "New project: public GitHub URL"},
+                     {"value": "sample", "label": "Bundled sample app"},
+                     {"value": "sample2", "label": "Bundled sample 2 (SQL built in code)"}]},
         {"name": "upload", "type": "file", "label": "Repository zip", "show_when": {"source": "upload"}},
         {"name": "github_url", "type": "text", "label": "GitHub URL", "placeholder": "https://github.com/owner/repo",
          "show_when": {"source": "github"}},

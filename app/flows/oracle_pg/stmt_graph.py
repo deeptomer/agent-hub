@@ -14,6 +14,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from collections import Counter
 from typing import Any, Callable, TypedDict
 
@@ -157,12 +159,18 @@ class StmtPipeline:
             ok, err = self.sandbox.apply_ddl(s.pg_sql or "")
             s.validation = {"status": "ok" if ok else "failed", "mode": mode, "error": err}
         else:
-            status, err = self.sandbox.validate_query(s.pg_sql or "")
+            sql = s.pg_sql or ""
+            dyn = re.findall(r"__DYN_(\w+?)__", sql)
+            # Parts decided at runtime cannot be planned as they are: check the statement with a placeholder in their
+            # place, and never report better than "inconclusive" because the real text is only known at runtime.
+            status, err = self.sandbox.validate_query(re.sub(r"__DYN_\w+?__", "1", sql) if dyn else sql)
+            if dyn and status == "ok":
+                status, err = "inconclusive", f"runtime part(s) {', '.join(dict.fromkeys(dyn))} replaced by a placeholder for the check"
             s.validation = {"status": status, "mode": mode, "error": err}
         v = s.validation["status"]
         lvl = "ok" if v == "ok" else ("warn" if v in ("inconclusive", "skipped") else "error")
         txt = {"ok": "valid on PostgreSQL" if mode == "postgres" else "valid syntax (no live PostgreSQL)",
-               "inconclusive": "parses; bind-parameter types need a cast", "skipped": "not planned",
+               "inconclusive": "parses; needs a closer look (cast or runtime part)", "skipped": "not planned",
                "failed": "failed"}[v]
         err_txt = f" - {s.validation['error']}" if s.validation["error"] else ""
         self.emit("Validator", f"{s.id} {s.label}: {txt}{err_txt}"[:300], lvl, id=s.id)
