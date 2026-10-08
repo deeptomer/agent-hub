@@ -18,7 +18,7 @@ Emit = Callable[..., None]
 # ----------------------------------------------------------------------------- SQL recognition
 _SQL_START = [
     re.compile(r"^\s*\{\s*(\?\s*=\s*)?call\b", re.I),
-    re.compile(r"^\s*SELECT\b.+\bFROM\b", re.I | re.S),
+    re.compile(r"^\s*SEL(?:ECT)?\b.+\bFROM\b", re.I | re.S),
     re.compile(r"^\s*INSERT\s+(INTO|ALL)\b", re.I),
     re.compile(r"^\s*UPDATE\s+\S+(\s+\w+)?\s+SET\b", re.I | re.S),
     re.compile(r"^\s*DELETE\s+(FROM\s+)?\S+", re.I),

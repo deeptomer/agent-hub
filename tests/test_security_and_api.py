@@ -182,3 +182,10 @@ def test_stop_cancels_a_running_flow_and_blocks_further_ai_calls():
     with pytest.raises(RunCancelled):
         llm.call_tool(agent="x", model="m", system="s", user="u", tool_name="t", tool_description="d", schema={})
     assert c.post("/api/runs/doesnotexist/cancel").status_code == 404
+
+
+def test_generic_flags_source_only_syntax_left_in_output():
+    from app.flows.oracle_pg.generic import leftover_constructs
+    assert leftover_constructs("INSERT INTO t VALUES (1) ON DUPLICATE KEY UPDATE a = 1", "postgresql") == ["ON DUPLICATE KEY UPDATE"]
+    assert leftover_constructs("INSERT INTO t VALUES (1) ON DUPLICATE KEY UPDATE a = 1", "mysql") == []
+    assert leftover_constructs("SELECT 1 LIMIT 5", "postgresql") == []

@@ -260,6 +260,50 @@ const EXAMPLES = [
   ["Pivot by quarter", "SELECT * FROM (\n  SELECT p.category, TO_CHAR(o.order_date, 'Q') AS qtr, i.quantity * i.unit_price AS rev\n  FROM orders o JOIN order_items i ON o.order_id = i.order_id JOIN products p ON p.product_id = i.product_id\n) PIVOT (SUM(rev) FOR qtr IN ('1' AS q1, '2' AS q2, '3' AS q3, '4' AS q4))"],
   ["PL/SQL function", "CREATE OR REPLACE FUNCTION order_total(p_order_id IN NUMBER) RETURN NUMBER IS\n  v_total NUMBER(14,2);\nBEGIN\n  SELECT NVL(SUM(quantity * unit_price), 0) INTO v_total FROM order_items WHERE order_id = p_order_id;\n  RETURN v_total;\nEXCEPTION\n  WHEN NO_DATA_FOUND THEN RETURN 0;\nEND order_total;"],
 ];
+/* One-click sample queries for every source database, so a query never has to be typed or pasted (some office laptops block pasting). */
+const SAMPLES = {
+  postgresql: [
+    ["Top customers (LIMIT, ILIKE)", "SELECT c.customer_id, c.full_name, COUNT(*) AS orders\nFROM customers c JOIN orders o ON o.customer_id = c.customer_id\nWHERE c.email ILIKE '%@example.com'\nGROUP BY c.customer_id, c.full_name\nORDER BY orders DESC\nLIMIT 10"],
+    ["Upsert (ON CONFLICT)", "INSERT INTO customers (customer_id, full_name, email)\nVALUES (1, 'Asha Rao', 'asha@example.com')\nON CONFLICT (customer_id) DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email"],
+    ["Dates and casts", "SELECT order_id, order_date::date AS d, NOW() - INTERVAL '7 days' AS week_ago, COALESCE(notes, 'none') AS notes\nFROM orders WHERE order_date > CURRENT_DATE - 30"]],
+  mysql: [
+    ["Paging with LIMIT", "SELECT order_id, IFNULL(notes, 'none') AS notes, NOW() AS checked_at\nFROM orders\nWHERE status = 'OPEN'\nORDER BY order_date DESC\nLIMIT 20, 10"],
+    ["Grouping and COALESCE", "SELECT customer_id, COUNT(*) AS orders, IFNULL(SUM(total), 0) AS revenue\nFROM orders\nWHERE created_at >= '2026-01-01'\nGROUP BY customer_id\nHAVING COUNT(*) > 2\nORDER BY revenue DESC"],
+    ["Backticks and IF()", "SELECT `order_id`, IF(`total` > 1000, 'big', 'small') AS size, DATE_FORMAT(`order_date`, '%Y-%m') AS month\nFROM `orders`"]],
+  mariadb: [
+    ["Paging with LIMIT", "SELECT order_id, IFNULL(notes, 'none') AS notes\nFROM orders\nWHERE status = 'OPEN'\nORDER BY order_date DESC\nLIMIT 10 OFFSET 20"],
+    ["Join and CONCAT", "SELECT c.id, CONCAT(c.first_name, ' ', c.last_name) AS full_name, COUNT(o.id) AS orders\nFROM customers c\nLEFT JOIN orders o ON o.customer_id = c.id\nGROUP BY c.id, c.first_name, c.last_name"],
+    ["Date functions", "SELECT order_id, DATE_ADD(order_date, INTERVAL 7 DAY) AS due, CURDATE() AS today FROM orders"]],
+  sqlserver: [
+    ["TOP, ISNULL, GETDATE", "SELECT TOP 5 ISNULL(c.name, 'n/a') AS customer, GETDATE() AS checked_at\nFROM customers c\nWHERE c.status = 'A'\nORDER BY c.name"],
+    ["Paging (OFFSET FETCH)", "SELECT order_id, total FROM orders\nORDER BY order_date DESC\nOFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY"],
+    ["String and date functions", "SELECT LEN(name) AS name_length, DATEADD(day, 7, order_date) AS due, CONVERT(varchar(10), order_date, 120) AS d\nFROM orders"]],
+  sqlite: [
+    ["Paging and IFNULL", "SELECT order_id, IFNULL(notes, 'none') AS notes FROM orders\nORDER BY order_date DESC\nLIMIT 10 OFFSET 20"],
+    ["Date handling", "SELECT order_id, date(order_date) AS d, strftime('%Y-%m', order_date) AS month FROM orders"],
+    ["Upsert", "INSERT INTO inventory (item_id, qty) VALUES (101, 5)\nON CONFLICT(item_id) DO UPDATE SET qty = qty + excluded.qty"]],
+  snowflake: [
+    ["QUALIFY and ROW_NUMBER", "SELECT customer_id, order_id, total\nFROM orders\nQUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total DESC) = 1"],
+    ["IFF and dates", "SELECT order_id, IFF(total > 1000, 'big', 'small') AS size, DATEADD(day, 7, order_date) AS due, CURRENT_TIMESTAMP() AS ts\nFROM orders"],
+    ["Date difference", "SELECT order_id, DATEDIFF(day, order_date, shipped_date) AS days_to_ship, IFF(shipped_date IS NULL, 'open', 'shipped') AS state FROM orders"]],
+  bigquery: [
+    ["Backticked table, SAFE_DIVIDE", "SELECT order_id, SAFE_DIVIDE(total, quantity) AS unit_price\nFROM `shop.sales.orders`\nWHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)"],
+    ["Array unnest", "SELECT o.order_id, item\nFROM `shop.sales.orders` o, UNNEST(o.items) AS item"],
+    ["Date truncation", "SELECT DATE_TRUNC(order_date, MONTH) AS month, SUM(total) AS revenue\nFROM `shop.sales.orders` GROUP BY month ORDER BY month"]],
+  redshift: [
+    ["Paging and NVL", "SELECT order_id, NVL(notes, 'none') AS notes, GETDATE() AS ts\nFROM orders ORDER BY order_date DESC LIMIT 10"],
+    ["DATEADD and aggregates", "SELECT customer_id, COUNT(*) AS orders, DATEADD(day, 7, MAX(order_date)) AS next_due\nFROM orders GROUP BY customer_id"],
+    ["Top rows per group", "SELECT * FROM (SELECT customer_id, order_id, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total DESC) AS rn FROM orders) t WHERE rn = 1"]],
+  databricks: [
+    ["Paging and date add", "SELECT order_id, date_add(order_date, 7) AS due, coalesce(notes, 'none') AS notes\nFROM orders ORDER BY order_date DESC LIMIT 10"],
+    ["Window function", "SELECT customer_id, order_id, SUM(total) OVER (PARTITION BY customer_id ORDER BY order_date) AS running_total FROM orders"],
+    ["Explode an array", "SELECT order_id, explode(items) AS item FROM orders"]],
+  teradata: [
+    ["TOP and date arithmetic", "SELECT TOP 5 order_id, order_date + 7 AS due FROM orders ORDER BY order_date DESC"],
+    ["QUALIFY", "SELECT customer_id, order_id, total FROM orders\nQUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total DESC) = 1"],
+    ["Aggregate with NULL handling", "SEL customer_id, COALESCE(SUM(total), 0) AS total FROM orders WHERE order_date > DATE '2026-01-01' GROUP BY customer_id"]],
+};
+const samplesFor = src => src === "oracle" ? EXAMPLES : (SAMPLES[src] || []);
 const ORACLE_TOKENS = /(\bROWNUM\b|\bCONNECT\s+BY\b|\bSTART\s+WITH\b|\bPRIOR\b|\bNVL2?\b(?=\s*\()|\bDECODE\b(?=\s*\()|\bSYS(?:DATE|TIMESTAMP)\b|\bFROM\s+DUAL\b|\bMINUS\b|\bKEEP\s*\(|\bPIVOT\b|\bLISTAGG\b|\(\+\)|\b\w+\.(?:NEXTVAL|CURRVAL)\b|\bADD_MONTHS\b|\bMONTHS_BETWEEN\b|\bSYS_CONNECT_BY_PATH\b|\bORDER\s+SIBLINGS\s+BY\b|\bRAISE_APPLICATION_ERROR\b|\bPRAGMA\s+AUTONOMOUS_TRANSACTION\b|\bBULK\s+COLLECT\b|\bVARCHAR2\b|\bNUMBER\b(?=\s*[(,)\s])|\/\*\+[^*]*\*\/)/gi;
 
 let CONFIG = {}, FLOWS = [], current = null, report = null, es = null, selectedId = null, filter = "all", query = "";
@@ -356,7 +400,7 @@ function selectFlow(id) {
 function renderInputs() {
   const box = $("#inputs");
   const keep = {};  // typed values survive a change of database pair
-  box.querySelectorAll("input[type=text],input[type=password],textarea").forEach(el => keep[el.name] = el.value);
+  box.querySelectorAll("input[type=text],input[type=password],textarea").forEach(el => { if (!el.dataset.auto) keep[el.name] = el.value; });  // an auto-filled sample is replaced when the database changes
   const keepRadio = {}; box.querySelectorAll("input[type=radio]:checked").forEach(r => keepRadio[r.name] = r.value);
   box.innerHTML = "";
   box.style.display = "grid"; box.style.gap = "16px";
@@ -375,7 +419,8 @@ function renderInputs() {
     } else if (inp.type === "secret") {
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="password" autocomplete="off" spellcheck="false" id="f_${inp.name}" name="${inp.name}"><div class="hint">${esc(inp.hint || "")}</div>`;
     } else if (inp.type === "textarea") {
-      const ex = inp.name === "sql" && $("#source_db").value === "oracle" ? `<div class="chips" id="examples">${EXAMPLES.map((e, i) => `<button type="button" class="chip" data-i="${i}">${esc(e[0])}</button>`).join("")}</div>` : "";
+      const smp = inp.name === "sql" ? samplesFor($("#source_db").value) : [];
+      const ex = smp.length ? `<div class="hint" style="margin:0 0 4px">No typing or pasting needed: pick a sample, then press Run analysis.</div><div class="chips" id="examples">${smp.map((e, i) => `<button type="button" class="chip" data-i="${i}">${esc(e[0])}</button>`).join("")}</div>` : "";
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label>${ex}<textarea id="f_${inp.name}" name="${inp.name}" placeholder="${esc(inp.placeholder || "")}" ${inp.optional ? "" : "required"}></textarea>`;
     } else {
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="text" id="f_${inp.name}" name="${inp.name}" placeholder="${esc(inp.placeholder || "")}">`;
@@ -385,7 +430,10 @@ function renderInputs() {
     if (k && keep[k.name]) k.value = keep[k.name];
   });
   box.onchange = applyVisibility;
-  box.onclick = e => { const c = e.target.closest(".chip"); if (c) { $("#f_sql").value = EXAMPLES[+c.dataset.i][1]; } };
+  box.onclick = e => { const c = e.target.closest(".chip"); if (c) { const t = $("#f_sql"); t.value = samplesFor($("#source_db").value)[+c.dataset.i][1]; t.dataset.auto = "1"; } };
+  box.oninput = e => { if (e.target.id === "f_sql") delete e.target.dataset.auto; };
+  const ta = $("#f_sql");  // start with a ready-to-run sample so a query never has to be entered
+  if (ta && !ta.value) { const first = samplesFor($("#source_db").value)[0]; if (first) { ta.value = first[1]; ta.dataset.auto = "1"; } }
   applyVisibility();
   $("#run-hint").textContent = current.id === "oracle-java-migration" ? (isFull() ? "The bundled sample runs in seconds." : "") : (isFull() ? "Validated on a real PostgreSQL sandbox." : "");
 }

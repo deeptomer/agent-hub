@@ -76,6 +76,27 @@ def parse_check(sql: str, tgt: str) -> str | None:
         return f"{type(exc).__name__}: {str(exc).splitlines()[0][:240]}"
 
 
+# Constructs that only some databases understand. If one is still in the output and the target is not in the set, the
+# statement will not run there, even though sqlglot's lenient parser may accept it.
+_ONLY_IN: list[tuple[str, str, set[str]]] = [
+    (r"\bON\s+DUPLICATE\s+KEY\s+UPDATE\b", "ON DUPLICATE KEY UPDATE", {"mysql", "mariadb"}),
+    (r"\bSELECT\s+(?:DISTINCT\s+)?TOP\s+\(?\d+", "TOP n", {"sqlserver"}),
+    (r"\bGETDATE\s*\(", "GETDATE()", {"sqlserver"}),
+    (r"\bQUALIFY\b", "QUALIFY", {"snowflake", "bigquery", "databricks", "teradata"}),
+    (r"^\s*SEL\b", "SEL", {"teradata"}),
+    (r"\bZEROIFNULL\s*\(", "ZEROIFNULL()", {"teradata", "snowflake"}),
+    (r"\bSYSDATE\b", "SYSDATE", {"oracle"}),
+    (r"\bLISTAGG\s*\(", "LISTAGG()", {"oracle", "redshift", "snowflake", "databricks"}),
+    (r"STRING_AGG\s*\([^)]*\)\s*WITHIN\s+GROUP", "STRING_AGG ... WITHIN GROUP", {"sqlserver"}),
+    (r"`", "backtick quoting", {"mysql", "mariadb", "bigquery", "databricks"}),
+]
+
+
+def leftover_constructs(sql: str, tgt: str) -> list[str]:
+    import re
+    return [name for pat, name, ok in _ONLY_IN if tgt not in ok and re.search(pat, sql, re.I | re.M)]
+
+
 def transpile(sql: str, src: str, tgt: str) -> str:
     masked, mapping = tokenize_placeholders(sql)
     out = sqlglot.transpile(masked, read=dialects.glot(src), write=dialects.glot(tgt), error_level=ErrorLevel.RAISE)
@@ -97,7 +118,7 @@ class GenericPipeline:
             s.pg_sql, s.residual = None, [f"transpiler could not handle it ({type(exc).__name__})"]
             return
         s.pg_sql, s.method = out, "rules"
-        s.residual = residual_constructs(out, s.oracle_sql, parser_output=True) if self.src == "oracle" else []
+        s.residual = residual_constructs(out, s.oracle_sql, parser_output=True) if self.src == "oracle" else leftover_constructs(out, self.tgt)
         s.notes.append(f"sqlglot transpile {self.sl} -> {self.tl}")
 
     def _llm(self, s: Stmt, last_error: str | None) -> bool:
@@ -131,7 +152,7 @@ class GenericPipeline:
             s.meta["llm_manual_review"] = str(res.get("manual_review_reason", "model asked for manual review"))[:300]
         for a in (res.get("assumptions") or [])[:4]:
             s.notes.append(f"assumption: {str(a)[:200]}")
-        s.residual = residual_constructs(sql, s.oracle_sql, parser_output=False) if self.src == "oracle" else []
+        s.residual = residual_constructs(sql, s.oracle_sql, parser_output=False) if self.src == "oracle" else leftover_constructs(sql, self.tgt)
         return True
 
     def _validate(self, s: Stmt) -> None:
