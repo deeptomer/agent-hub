@@ -50,11 +50,12 @@ def register(flow: FlowDef) -> None:
     FLOWS[flow.id] = flow
 
 
-def start(flow: FlowDef, run: Run, inputs: dict[str, Any], use_llm: bool = True) -> None:
+def start(flow: FlowDef, run: Run, inputs: dict[str, Any], use_llm: bool = True, llm_key: str | None = None,
+          llm_model: str | None = None) -> None:
     """Run a flow on a background thread; never raises into the caller."""
     wd = settings.data_dir / "runs" / run.id
     wd.mkdir(parents=True, exist_ok=True)
-    ctx = RunContext(run=run, inputs=inputs, llm=LLM(enabled=use_llm), workdir=wd)
+    ctx = RunContext(run=run, inputs=inputs, llm=LLM(enabled=use_llm, api_key=llm_key, model_override=llm_model), workdir=wd)
 
     def job() -> None:
         run.status = "running"

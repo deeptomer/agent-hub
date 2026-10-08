@@ -13,6 +13,20 @@ class Settings:
         return os.getenv("ANTHROPIC_API_KEY") or None
 
     @property
+    def model_choices(self) -> list[str]:
+        """Models a caller may pick for a run (allow-list; set MODEL_CHOICES to a comma-separated list to change it)."""
+        raw = os.getenv("MODEL_CHOICES", "claude-sonnet-5-5,claude-opus-5-5,claude-haiku-4-5-20251001,claude-fable-5-1")
+        return [m.strip() for m in raw.split(",") if m.strip()]
+
+    @property
+    def model_orchestrator(self) -> str:
+        return os.getenv("MODEL_ORCHESTRATOR", os.getenv("MODEL_CONVERTER", "claude-sonnet-5-5"))
+
+    @property
+    def model_critic(self) -> str:
+        return os.getenv("MODEL_CRITIC", os.getenv("MODEL_CONVERTER", "claude-sonnet-5-5"))
+
+    @property
     def model_converter(self) -> str:
         return os.getenv("MODEL_CONVERTER", "claude-sonnet-5-5")
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import io
 import re
+import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
@@ -69,19 +71,54 @@ def safe_extract_zip(data: bytes, dest: Path, *, max_files: int, max_total_bytes
 _GH = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?(?:/tree/([\w./-]+))?/?$")
 
 
-def fetch_github_zip(url: str, max_bytes: int) -> bytes:
-    """Public GitHub repositories only. The host is fixed so user input cannot steer the request elsewhere (SSRF)."""
-    m = _GH.match(url.strip())
-    if not m:
-        raise UnsafeInput("only public https://github.com/<owner>/<repo> URLs are supported")
-    owner, repo, branch = m.group(1), m.group(2), m.group(3) or "HEAD"
-    api = f"https://codeload.github.com/{owner}/{repo}/zip/{branch}"
-    req = urllib.request.Request(api, headers={"User-Agent": "oracle2pg-agent-hub"})
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed https host
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):  # noqa: D401 - we follow the one redirect ourselves, without the token
+        return None
+
+
+def _read_limited(req: urllib.request.Request, max_bytes: int, opener=None) -> bytes:
+    with (opener.open(req, timeout=30) if opener else urllib.request.urlopen(req, timeout=30)) as resp:  # noqa: S310 - fixed https hosts
         data = resp.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise UnsafeInput("repository archive is larger than the upload limit")
     return data
+
+
+def fetch_github_zip(url: str, max_bytes: int, token: str | None = None) -> bytes:
+    """GitHub repositories only. Hosts are fixed so user input cannot steer the request elsewhere (SSRF).
+    Public repos need no token. With a personal access token (read access to contents) a private repo works too; the token
+    is sent only to api.github.com, never to the download host, and never appears in error messages."""
+    m = _GH.match(url.strip())
+    if not m:
+        raise UnsafeInput("only https://github.com/<owner>/<repo> URLs are supported")
+    owner, repo, branch = m.group(1), m.group(2), m.group(3) or "HEAD"
+    try:
+        if not token:
+            req = urllib.request.Request(f"https://codeload.github.com/{owner}/{repo}/zip/{branch}",
+                                         headers={"User-Agent": "oracle2pg-agent-hub"})
+            return _read_limited(req, max_bytes)
+        api = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}/zipball/{branch if branch != 'HEAD' else ''}".rstrip("/"),
+                                     headers={"User-Agent": "oracle2pg-agent-hub", "Authorization": f"Bearer {token}",
+                                              "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            return _read_limited(api, max_bytes, opener)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (301, 302, 303, 307, 308):
+                raise
+            loc = exc.headers.get("Location", "")
+            host = urllib.parse.urlparse(loc)
+            if host.scheme != "https" or host.hostname not in ("codeload.github.com", "api.github.com"):
+                raise UnsafeInput("GitHub redirected to an unexpected host") from None
+            return _read_limited(urllib.request.Request(loc, headers={"User-Agent": "oracle2pg-agent-hub"}), max_bytes)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise UnsafeInput("GitHub rejected the token (it needs read access to the repository's contents)") from None
+        if exc.code == 404:
+            raise UnsafeInput("repository not found, or it is private and needs a token with access") from None
+        raise UnsafeInput(f"GitHub returned HTTP {exc.code}") from None
+    except urllib.error.URLError as exc:
+        raise UnsafeInput(f"could not reach GitHub ({type(exc.reason).__name__})") from None
 
 
 _INJECTION = [

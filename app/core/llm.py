@@ -13,15 +13,29 @@ except Exception:  # pragma: no cover
 
 
 class LLM:
-    def __init__(self, enabled: bool = True) -> None:
+    """One Claude connection per run. The key is either the caller's own (per-run, held only in memory, never stored,
+    logged or returned) or the server's ANTHROPIC_API_KEY. `model_override` forces one model for every agent."""
+
+    def __init__(self, enabled: bool = True, api_key: str | None = None, model_override: str | None = None) -> None:
         self._lock = threading.Lock()
         self.usage: dict[str, dict[str, int]] = {}
         self.last_error: str | None = None
         self.disabled = False
         self._client = None
-        key = settings.anthropic_api_key
-        if enabled and key and anthropic is not None:
+        self.model_override = model_override or None
+        self._secret = (api_key or "").strip() or None
+        self.key_source: str | None = None
+        key = self._secret or (settings.anthropic_api_key if enabled else None)
+        if key and (enabled or self._secret) and anthropic is not None:
+            self.key_source = "user" if self._secret else "server"
             self._client = anthropic.Anthropic(api_key=key, max_retries=2, timeout=90.0)
+        self._key = key
+
+    def _redact(self, text: str) -> str:
+        return text.replace(self._key, "[redacted-key]") if self._key else text
+
+    def describe(self) -> dict[str, Any]:
+        return {"key_source": self.key_source, "model": self.model_override or "per-agent defaults"}
 
     @property
     def available(self) -> bool:
@@ -40,6 +54,7 @@ class LLM:
         """Ask Claude to answer by calling one tool whose input_schema is `schema`. Returns the tool input or None."""
         if not self.available:
             return None
+        model = self.model_override or model
         try:
             resp = self._client.messages.create(  # type: ignore[union-attr]
                 model=model,
@@ -56,7 +71,7 @@ class LLM:
             self.last_error = "model returned no tool call"
             return None
         except Exception as exc:  # network, rate limit, auth, bad model name...
-            self.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            self.last_error = self._redact(f"{type(exc).__name__}: {str(exc)[:300]}")
             name = type(exc).__name__
             if name in ("AuthenticationError", "PermissionDeniedError", "NotFoundError"):
                 self.disabled = True  # do not hammer the API with a bad key / model
@@ -69,3 +84,19 @@ class LLM:
             calls = sum(u["calls"] for u in self.usage.values())
             return {"calls": calls, "input_tokens": total_in, "output_tokens": total_out,
                     "by_agent": {k: dict(v) for k, v in self.usage.items()}}
+
+
+def check_connection(api_key: str, model: str) -> tuple[bool, str]:
+    """Cheap preflight for the 'Test connection' button: one 1-token call. Never echoes the key."""
+    if anthropic is None:
+        return False, "The Anthropic SDK is not installed on the server"
+    try:
+        client = anthropic.Anthropic(api_key=api_key, max_retries=0, timeout=20.0)
+        client.messages.create(model=model, max_tokens=1, messages=[{"role": "user", "content": "ping"}])
+        return True, "Key accepted and model reachable"
+    except Exception as exc:
+        name = type(exc).__name__
+        hint = {"AuthenticationError": "The key was rejected", "PermissionDeniedError": "The key has no access to this model",
+                "NotFoundError": "The model name was not found for this key", "RateLimitError": "Rate limited; the key works"}.get(name)
+        msg = hint or f"{name}: {str(exc)[:160]}"
+        return name == "RateLimitError", msg.replace(api_key, "[redacted-key]")

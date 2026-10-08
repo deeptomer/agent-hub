@@ -122,6 +122,10 @@ ul.plain{margin:6px 0 0;padding-left:18px}
 ul.plain li{margin:3px 0}
 .vline{padding:8px 12px;border-radius:var(--r);font-size:14.5px;margin:8px 0;background:var(--rule-soft)}
 .vline.ok{background:#e5f3ec;color:#1f5d40}.vline.failed{background:#fdeceb;color:var(--bad)}.vline.inconclusive,.vline.skipped{background:#fff3da;color:#7a4e00}
+select{font:inherit;padding:9px 12px;border:1px solid var(--rule);border-radius:var(--r);background:#fbfcfd;max-width:100%}
+.trace{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:14px;margin-top:8px}
+.trace b{font-weight:600}
+.trace span.why{color:var(--muted)}
 details.box{border:1px solid var(--rule);border-radius:var(--r);background:var(--panel);padding:10px 14px;margin:12px 0}
 details.box summary{cursor:pointer;font-weight:500}
 .finding{padding:8px 0;border-bottom:1px solid var(--rule-soft);font-size:14.5px}
@@ -154,11 +158,23 @@ details.box summary{cursor:pointer;font-weight:500}
 
     <form class="panel composer" id="composer">
       <div id="inputs"></div>
-      <div class="field hidden" id="code-field">
-        <label for="access_code">Access code for AI assist</label>
-        <input type="password" id="access_code" autocomplete="off">
-        <div class="hint">Leave empty to run with the rules engine only. Claude is used only when the code is correct.</div>
-      </div>
+      <details class="box" id="ai-box" open>
+        <summary id="ai-summary">AI connection</summary>
+        <div class="field" style="margin-top:10px"><span class="lab">Who provides the Claude access for this run?</span>
+          <div class="seg" id="ai-mode">
+            <label><input type="radio" name="ai_mode" value="server"><span>Server key</span></label>
+            <label><input type="radio" name="ai_mode" value="own"><span>My own Anthropic API key</span></label>
+            <label><input type="radio" name="ai_mode" value="none"><span>No AI (rules only)</span></label>
+          </div></div>
+        <div class="field hidden" id="own-key-field" style="margin-top:10px"><label for="llm_key">Your Anthropic API key</label>
+          <input type="password" id="llm_key" autocomplete="off" spellcheck="false" placeholder="sk-ant-...">
+          <div class="hint">Sent over HTTPS with the run and kept in memory only while it runs. Never stored, logged or added to a report. A GitHub token cannot be used here: GitHub Models was retired in July 2026.</div></div>
+        <div class="field hidden" id="code-field" style="margin-top:10px"><label for="access_code">Access code for the server key</label>
+          <input type="password" id="access_code" autocomplete="off">
+          <div class="hint">Without the code the server key is not used and the run is rules-only.</div></div>
+        <div class="field" style="margin-top:10px"><label for="llm_model">Model for all agents</label>
+          <div class="row" style="margin:0"><select id="llm_model"></select><button type="button" class="btn ghost" id="ai-test">Test connection</button><span class="hint" id="ai-test-msg" aria-live="polite"></span></div></div>
+      </details>
       <div class="row"><button class="btn" id="run" type="submit">Run analysis</button><span class="hint" id="run-hint"></span></div>
       <div class="err hidden" id="error" role="alert"></div>
     </form>
@@ -177,7 +193,7 @@ details.box summary{cursor:pointer;font-weight:500}
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const AGENT_COLOR = { Platform:"#6b7b8c", Intake:"#6b7b8c", Discovery:"#7a5aa6", "Code Reader":"#5b6fa6", Security:"#b3261e", Converter:"#2d5f8e", Validator:"#2c7a55", "Risk Reviewer":"#a86b00", Report:"#1d2733" };
+const AGENT_COLOR = { Platform:"#6b7b8c", Intake:"#6b7b8c", Orchestrator:"#8a4f7d", Critic:"#b04a2e", Discovery:"#7a5aa6", "Code Reader":"#5b6fa6", Security:"#b3261e", Converter:"#2d5f8e", Validator:"#2c7a55", "Risk Reviewer":"#a86b00", Report:"#1d2733" };
 const EXAMPLES = [
   ["Paging with ROWNUM", "SELECT * FROM (\n  SELECT a.*, ROWNUM AS rn FROM (\n    SELECT customer_id, full_name, email FROM customers WHERE status_flag = 'A' ORDER BY full_name\n  ) a WHERE ROWNUM <= 50\n) WHERE rn > 40"],
   ["Org chart (CONNECT BY)", "SELECT LEVEL AS depth,\n       LPAD(' ', 2 * (LEVEL - 1)) || e.full_name AS indented_name,\n       SYS_CONNECT_BY_PATH(e.full_name, ' > ') AS path\nFROM employees e\nSTART WITH e.manager_id IS NULL\nCONNECT BY PRIOR e.employee_id = e.manager_id\nORDER SIBLINGS BY e.full_name"],
@@ -193,15 +209,39 @@ let CONFIG = {}, FLOWS = [], current = null, report = null, es = null, selectedI
 async function boot() {
   [CONFIG, FLOWS] = await Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/flows").then(r => r.json())]);
   renderStatus(); renderFlowButtons();
-  $("#code-field").classList.toggle("hidden", !CONFIG.access_code_required);
+  initAI();
   selectFlow(FLOWS[0].id);
 }
 function renderStatus() {
   const llm = CONFIG.llm_configured, db = CONFIG.database_configured;
   $("#status").innerHTML =
-    `<div><span class="dot ${llm ? "on" : "off"}"></span><span>${llm ? "Claude: " + esc(CONFIG.models.converter) : "Claude not configured: rules-only runs"}</span></div>` +
+    `<div><span class="dot ${llm ? "on" : "off"}"></span><span>${llm ? "Server key set, default model " + esc(CONFIG.models.converter) : "No server key: use your own key or run rules-only"}</span></div>` +
     `<div><span class="dot ${db ? "on" : "off"}"></span><span>${db ? "PostgreSQL sandbox connected" : "No sandbox database: syntax-only checks"}</span></div>`;
 }
+function initAI() {
+  const server = CONFIG.llm_configured;
+  $("#llm_model").innerHTML = `<option value="">Per-agent defaults (${esc(CONFIG.models.converter)})</option>` + CONFIG.model_choices.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  const mode = server ? "server" : "none";
+  document.querySelectorAll("#ai-mode input").forEach(r => { r.checked = r.value === mode; if (r.value === "server" && !server) r.disabled = true; });
+  const upd = () => {
+    const m = aiMode();
+    $("#own-key-field").classList.toggle("hidden", m !== "own");
+    $("#code-field").classList.toggle("hidden", !(m === "server" && CONFIG.access_code_required));
+    $("#llm_model").disabled = m === "none"; $("#ai-test").disabled = m === "none";
+    $("#ai-summary").textContent = "AI connection: " + ({ server: "server key", own: "your own key", none: "off, rules only" }[m]);
+  };
+  $("#ai-mode").onchange = upd; upd();
+  $("#ai-test").onclick = async () => {
+    const fd = new FormData(); fd.append("llm_model", $("#llm_model").value);
+    if (aiMode() === "own") fd.append("llm_key", $("#llm_key").value);
+    $("#ai-test-msg").textContent = "Checking...";
+    try {
+      const r = await fetch("/api/llm/check", { method: "POST", body: fd }); const j = await r.json();
+      $("#ai-test-msg").textContent = r.ok ? (j.ok ? "OK: " : "Problem: ") + j.message : (j.detail || "Check failed");
+    } catch { $("#ai-test-msg").textContent = "Could not reach the server"; }
+  };
+}
+function aiMode() { const r = document.querySelector("#ai-mode input:checked"); return r ? r.value : "none"; }
 function renderFlowButtons() {
   $("#flows").innerHTML = FLOWS.map(f => `<button class="flow-btn" data-id="${f.id}"><b>${esc(f.title)}</b><span>${esc(f.tagline)}</span></button>`).join("");
   $("#flows").onclick = e => { const b = e.target.closest(".flow-btn"); if (b) selectFlow(b.dataset.id); };
@@ -227,6 +267,8 @@ function renderInputs() {
         inp.options.map(o => `<label><input type="radio" name="${inp.name}" value="${o.value}" ${o.value === inp.default ? "checked" : ""}><span>${esc(o.label)}</span></label>`).join("") + `</div>`;
     } else if (inp.type === "file") {
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="file" id="f_${inp.name}" name="${inp.name}" accept=".zip"><div class="hint">Up to ${CONFIG.limits.upload_mb} MB. Only Java, XML, SQL and config files are read; nothing is executed.</div>`;
+    } else if (inp.type === "secret") {
+      wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="password" autocomplete="off" spellcheck="false" id="f_${inp.name}" name="${inp.name}"><div class="hint">${esc(inp.hint || "")}</div>`;
     } else if (inp.type === "textarea") {
       const ex = inp.name === "sql" ? `<div class="chips" id="examples">${EXAMPLES.map((e, i) => `<button type="button" class="chip" data-i="${i}">${esc(e[0])}</button>`).join("")}</div>` : "";
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label>${ex}<textarea id="f_${inp.name}" name="${inp.name}" placeholder="${esc(inp.placeholder || "")}" ${inp.optional ? "" : "required"}></textarea>`;
@@ -259,7 +301,9 @@ $("#composer").addEventListener("submit", async e => {
       else fd.append(el.name, el.value);
     });
   });
-  fd.append("access_code", $("#access_code").value);
+  const mode = aiMode();
+  if (mode === "none") fd.append("no_ai", "1");
+  else { fd.append("llm_model", $("#llm_model").value); if (mode === "own") fd.append("llm_key", $("#llm_key").value); else fd.append("access_code", $("#access_code").value); }
   $("#error").classList.add("hidden"); $("#run").disabled = true;
   try {
     const r = await fetch("/api/runs", { method: "POST", body: fd });
@@ -314,6 +358,13 @@ function renderReport() {
       ${rd && rd.gap_fragments ? `<p>${rd.gap_fragments} SQL-looking string(s) in ${rd.gap_files} file(s) were not whole statements in the code. ${rd.used_llm ? `Claude reconstructed ${rd.reconstructed}${rd.rejected ? ` and ${rd.rejected} were rejected as not matching the file` : ""}.` : "Run with Claude enabled to reconstruct them; they are listed under findings."}</p>` : `<p class="hint">Every SQL string in the code was extracted as a statement.</p>`}
       ${prof.sql_by_file.length ? `<p class="hint">Most SQL: ${prof.sql_by_file.slice(0, 4).map(f => esc(f.file.split("/").pop()) + " (" + f.statements + ")").join(", ")}</p>` : ""}
     </details>` : "";
+  const orch = m.orchestration;
+  const orchBox = orch ? `<details class="box" open><summary>Orchestration: who decided what</summary>
+      <p><b>${orch.plan.source === "orchestrator" ? "Plan written by the Orchestrator agent (Claude)" : "Default plan (no AI planning in this run)"}</b>: ${esc(orch.plan.rationale)}</p>
+      <p class="hint">Code Reader ${orch.plan.run_code_reader ? "on" : "off"} | review depth: ${esc(orch.plan.review_depth)} | Critic ${orch.plan.run_critic ? "on" : "off"} | up to ${orch.plan.max_repairs} repair(s) | model: ${esc(orch.ai.model)} | key: ${esc(orch.ai.key_source || "none")}</p>
+      ${orch.plan.focus.length ? `<p class="hint">Risk Reviewer focus: ${orch.plan.focus.map(esc).join("; ")}</p>` : ""}
+      <div class="trace">${orch.trace.map(t => `<b>${esc(t.agent)}</b><span>${esc(t.decision)}${t.reason ? ` <span class="why">- ${esc(t.reason)}</span>` : ""}</span>`).join("")}</div>
+    </details>` : "";
   $("#results").innerHTML = `
     <div class="panel">
       <p class="summary">${esc(report.executive_summary)}</p>
@@ -329,6 +380,7 @@ function renderReport() {
       <div class="row"><a class="btn ghost" href="${dl("html")}">Download report (HTML)</a><a class="btn ghost" href="${dl("md")}">Markdown</a><a class="btn ghost" href="${dl("json")}">JSON</a>
         <span class="hint">${m.llm.available ? "Claude calls: " + m.llm.usage.calls + ", tokens in/out " + m.llm.usage.input_tokens + "/" + m.llm.usage.output_tokens : "Rules-only run (no Claude calls)"} | ${m.duration_s}s</span></div>
     </div>
+    ${orchBox}
     ${profBox}
     ${fnd}
     <div class="split" style="margin-top:20px">

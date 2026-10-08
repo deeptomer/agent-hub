@@ -27,8 +27,26 @@ from Oracle to PostgreSQL; the second converts a single pasted statement.
 Notes: free web services sleep after ~15 min idle (first request takes ~50 s — open it before your slot);
 the free Postgres database expires after 30 days.
 
+## Agents and orchestration
+A LangGraph **supervisor** routes the work. After every worker the **Orchestrator** node decides who runs next:
+Discovery, Code Reader, Converter (schema, PL/SQL, queries), Validator, Risk Reviewer, Critic, Report.
+With Claude available the Orchestrator agent also (1) writes a plan after discovery (use the Code Reader's AI part or not,
+review depth, repair budget, what the Risk Reviewer should focus on) and (2) triages statements that still fail, so the
+Critic agent only gets those worth another try. Plans are clamped in code (`orchestrator.py`): the model cannot disable
+validation or exceed the repair cap. Without Claude, a deterministic default plan runs. The report shows the plan and a trace.
+
+## Credentials and models
+* **Server key** – `ANTHROPIC_API_KEY` on Render (optionally gated by `ACCESS_CODE`).
+* **Your own key** – paste an Anthropic API key in the "AI connection" panel. It is sent with the run over HTTPS, held in
+  memory only for that run, never stored, logged or put in a report; errors are redacted. No access code is needed because you pay.
+* **No AI** – rules-only run.
+* **Model** – pick one model for all agents, or leave the per-agent defaults (`MODEL_ORCHESTRATOR`, `MODEL_CONVERTER`,
+  `MODEL_REVIEWER`, `MODEL_CRITIC`). Allowed choices: `MODEL_CHOICES`.
+* **GitHub token** – optional, for private repositories only (fine-grained, read-only Contents). Sent to api.github.com only.
+  GitHub tokens cannot be used for AI: GitHub Models was retired in July 2026.
+
 ## Configuration
-`ANTHROPIC_API_KEY`, `MODEL_CONVERTER`, `MODEL_REVIEWER`, `DATABASE_URL`, `ACCESS_CODE`, `MAX_UPLOAD_MB`, `MAX_FILES`,
+`ANTHROPIC_API_KEY`, `MODEL_ORCHESTRATOR`, `MODEL_CONVERTER`, `MODEL_REVIEWER`, `MODEL_CRITIC`, `MODEL_CHOICES`, `DATABASE_URL`, `ACCESS_CODE`, `MAX_UPLOAD_MB`, `MAX_FILES`,
 `MAX_STATEMENTS`, `LLM_CONCURRENCY`, `MAX_REPAIR_ATTEMPTS`, `MAX_CONCURRENT_RUNS`, `RUNS_PER_HOUR_PER_IP`.
 
 ## Adding another agent flow

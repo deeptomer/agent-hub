@@ -132,7 +132,8 @@ def _valid_reconstruction(sql: str, src_lower: str) -> str | None:
     return None
 
 
-def run_reader(root: Path, stmts: list[Stmt], findings: list[Finding], stats: dict, llm: LLM, emit: Emit) -> list[Stmt]:
+def run_reader(root: Path, stmts: list[Stmt], findings: list[Finding], stats: dict, llm: LLM, emit: Emit,
+               use_llm: bool = True) -> list[Stmt]:
     """Adds `stats['profile']`, may append reconstructed statements, and records unresolved gaps as findings."""
     files = sorted(p for p in root.rglob("*") if p.is_file())
     stats["profile"] = project_profile(root, files, stmts)
@@ -148,9 +149,9 @@ def run_reader(root: Path, stmts: list[Stmt], findings: list[Finding], stats: di
         return stmts
 
     emit("Code Reader", f"{n_frag} SQL-looking string(s) in {len(gaps)} Java file(s) are not part of any extracted statement "
-                        "(StringBuilder chains, String.format, helper methods)", "warn" if not llm.available else "info")
+                        "(StringBuilder chains, String.format, helper methods)", "warn" if not (llm.available and use_llm) else "info")
     unresolved = dict(gaps)
-    if llm.available:
+    if llm.available and use_llm:
         stats["reader"]["used_llm"] = True
         ranked = sorted(gaps.items(), key=lambda kv: -len(kv[1]))[:MAX_GAP_FILES]
         existing = {_norm(s.oracle_sql) for s in stmts}
@@ -195,7 +196,8 @@ def run_reader(root: Path, stmts: list[Stmt], findings: list[Finding], stats: di
         if len(gaps) > len(ranked):
             emit("Code Reader", f"Read the {len(ranked)} files with the most gaps; {len(gaps) - len(ranked)} more were not read (cost cap)", "warn")
     else:
-        emit("Code Reader", "Claude is not available for this run, so these fragments are listed as findings instead", "warn")
+        emit("Code Reader", ("The Orchestrator chose not to spend Claude calls on this" if llm.available else "Claude is not available for this run")
+             + ", so these fragments are listed as findings instead", "warn")
 
     for rel, frags in unresolved.items():
         line, text = frags[0]
