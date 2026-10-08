@@ -188,6 +188,7 @@ class LLM:
     def __init__(self, enabled: bool = True, api_key: str | None = None, model_override: str | None = None,
                  provider: str | None = None) -> None:
         self._lock = threading.Lock()
+        self.cancel_check = None  # set by the platform: raises RunCancelled when the user pressed Stop
         self.usage: dict[str, dict[str, int]] = {}
         self.last_error: str | None = None
         self.disabled = False
@@ -244,6 +245,8 @@ class LLM:
     def call_tool(self, *, agent: str, model: str, system: str, user: str, tool_name: str,
                   tool_description: str, schema: dict[str, Any], max_tokens: int = 4096) -> dict[str, Any] | None:
         """Ask Claude to answer by calling one tool whose input_schema is `schema`. Returns the tool input or None."""
+        if self.cancel_check is not None:
+            self.cancel_check()  # no new AI call once the user has pressed Stop
         if not self.available:
             return None
         if self._copilot is not None:

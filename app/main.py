@@ -220,6 +220,14 @@ def run_status(run_id: str) -> dict:
     return {**r.summary(), "has_result": r.result is not None, "event_count": len(r.events)}
 
 
+@app.post("/api/runs/{run_id}/cancel")
+def run_cancel(run_id: str) -> dict:
+    """The Stop button. Cooperative: the run stops at its next step or AI call, and no new AI call is made after this."""
+    r = _run_or_404(run_id)
+    stopped = r.cancel()
+    return {**r.summary(), "stopped": stopped}
+
+
 @app.get("/api/runs/{run_id}/events")
 async def run_events(run_id: str, request: Request, start: int = 0) -> StreamingResponse:
     run = _run_or_404(run_id)
@@ -230,7 +238,7 @@ async def run_events(run_id: str, request: Request, start: int = 0) -> Streaming
             for e in run.events_since(i):
                 yield f"id: {e.seq}\ndata: {json.dumps(e.to_dict())}\n\n"
                 i = e.seq + 1
-            if run.status in ("done", "error") and not run.events_since(i):
+            if run.status in ("done", "error", "cancelled") and not run.events_since(i):
                 yield f"event: end\ndata: {json.dumps({'status': run.status, 'error': run.error})}\n\n"
                 return
             if await request.is_disconnected():
@@ -248,7 +256,7 @@ async def run_events(run_id: str, request: Request, start: int = 0) -> Streaming
 def run_result(run_id: str) -> JSONResponse:
     r = _run_or_404(run_id)
     if r.result is None:
-        raise HTTPException(409, "Run has not finished" if r.status in ("queued", "running") else (r.error or "No result"))
+        raise HTTPException(409, "Run has not finished" if r.status in ("queued", "running") else ("The run was stopped" if r.status == "cancelled" else (r.error or "No result")))
     return JSONResponse(r.result)
 
 

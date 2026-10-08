@@ -135,3 +135,50 @@ def test_progress_events_reach_100_for_full_run(client):
     import re
     vals = [int(x) for x in re.findall(r'"progress": \[(\d+), 100\]', text)]
     assert vals and vals == sorted(vals) and max(vals) == 100
+
+
+# ---------------------------------------------------------------- Stop button
+def test_stop_cancels_a_running_flow_and_blocks_further_ai_calls():
+    import threading
+    import time
+    from fastapi.testclient import TestClient
+    from app.core import registry
+    from app.core.events import RunCancelled, store
+    from app.main import app
+
+    reached_end, started = threading.Event(), threading.Event()
+
+    def slow_runner(ctx):
+        started.set()
+        try:
+            for _ in range(200):          # a long-running flow that reports as it goes
+                ctx.emit("Converter", "working", "info")
+                time.sleep(0.02)
+            reached_end.set()
+            return {"summary": {}}
+        finally:
+            ctx.inputs["cleaned_up"] = True   # stands in for the sandbox teardown in the real flow's finally block
+
+    flow = registry.FlowDef(id="slow-test", title="Slow", tagline="", description="", agents=[], inputs=[], runner=slow_runner)
+    run = store.create("slow-test")
+    inputs: dict = {}
+    registry.start(flow, run, inputs, use_llm=False)
+    assert started.wait(3)
+    c = TestClient(app)
+    r = c.post(f"/api/runs/{run.id}/cancel")
+    assert r.status_code == 200 and r.json()["status"] == "cancelled" and r.json()["stopped"] is True
+    time.sleep(0.4)
+    assert not reached_end.is_set(), "the worker must stop at its next step"
+    assert inputs.get("cleaned_up"), "finally blocks must still run so the sandbox is dropped"
+    assert run.result is None and run.status == "cancelled"
+    assert any("stopped by you" in e.message.lower() for e in run.events)
+    assert c.post(f"/api/runs/{run.id}/cancel").json()["stopped"] is False       # second press is harmless
+    assert c.get(f"/api/runs/{run.id}/result").status_code == 409
+    with pytest.raises(RunCancelled):
+        run.emit("Converter", "late event")
+    from app.core.llm import LLM
+    llm = LLM(enabled=False)
+    llm.cancel_check = run.check_cancel
+    with pytest.raises(RunCancelled):
+        llm.call_tool(agent="x", model="m", system="s", user="u", tool_name="t", tool_description="d", schema={})
+    assert c.post("/api/runs/doesnotexist/cancel").status_code == 404

@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+class RunCancelled(BaseException):
+    """Raised inside a run when the user pressed Stop. It derives from BaseException on purpose: the many
+    `except Exception` guards that keep one bad statement from killing a run must not swallow a cancellation."""
+
+
 @dataclass
 class Event:
     seq: int
@@ -27,7 +32,8 @@ class Run:
         self.id = uuid.uuid4().hex[:12]
         self.flow_id = flow_id
         self.client_ip = client_ip
-        self.status = "queued"  # queued | running | done | error
+        self.status = "queued"  # queued | running | done | error | cancelled
+        self.cancel_event = threading.Event()
         self.created = time.time()
         self.finished: float | None = None
         self.events: list[Event] = []
@@ -35,9 +41,35 @@ class Run:
         self.error: str | None = None
         self._lock = threading.Lock()
 
-    def emit(self, agent: str, message: str, level: str = "info", **data: Any) -> None:
+    @property
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
+
+    def check_cancel(self) -> None:
+        if self.cancel_event.is_set():
+            raise RunCancelled()
+
+    def log(self, agent: str, message: str, level: str = "info", **data: Any) -> None:
+        """Append an event without a cancellation check (platform bookkeeping)."""
         with self._lock:
             self.events.append(Event(len(self.events), time.time(), agent, level, message, data))
+
+    def emit(self, agent: str, message: str, level: str = "info", **data: Any) -> None:
+        """Flows call this constantly, so it doubles as the cooperative cancellation point."""
+        self.check_cancel()
+        self.log(agent, message, level, **data)
+
+    def cancel(self) -> bool:
+        """Stop the run. Returns False if it had already finished. The status flips at once so the UI can react;
+        the worker thread stops at its next event or AI call."""
+        with self._lock:
+            if self.status in ("done", "error", "cancelled"):
+                return False
+            self.status = "cancelled"
+            self.finished = time.time()
+            self.cancel_event.set()
+        self.log("Platform", "Run stopped by you", "warn")
+        return True
 
     def events_since(self, index: int) -> list[Event]:
         with self._lock:
@@ -61,7 +93,7 @@ class RunStore:
             if len(self._runs) > self._max:
                 oldest = sorted(self._runs.values(), key=lambda r: r.created)[: len(self._runs) - self._max]
                 for r in oldest:
-                    if r.status in ("done", "error"):
+                    if r.status in ("done", "error", "cancelled"):
                         self._runs.pop(r.id, None)
         return run
 

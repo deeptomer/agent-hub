@@ -37,7 +37,7 @@ button,input,textarea,select{font:inherit;color:inherit}
 .dot{width:8px;height:8px;border-radius:50%;background:#6b7b8c;flex:none;transform:translateY(0)}
 .dot.on{background:#5fc596}.dot.off{background:#d99a3b}
 /* ---------- main ---------- */
-main{padding:32px clamp(18px,4vw,56px) 80px;max-width:1280px;width:100%}
+main{min-width:0;padding:32px clamp(18px,4vw,56px) 80px;max-width:1280px;width:100%}
 h1{font-size:clamp(26px,3.2vw,38px);line-height:1.1;margin:0 0 10px;letter-spacing:-.02em;font-weight:700}
 h2{font-size:20px;margin:0 0 12px;letter-spacing:-.01em;font-weight:700}
 h3{font-size:16px;margin:0 0 8px;font-weight:700}
@@ -46,7 +46,7 @@ h3{font-size:16px;margin:0 0 8px;font-weight:700}
 .agents li{display:flex;gap:7px;align-items:baseline}
 .agents li::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c,#778);flex:none}
 .panel{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);padding:20px}
-.composer{display:grid;gap:16px}
+.composer{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 .field label,.field .lab{display:block;font-weight:500;margin-bottom:6px;font-size:14.5px}
 .field .hint{font-size:13px;color:var(--muted);margin-top:4px}
 input[type=text],textarea,input[type=password]{width:100%;padding:10px 12px;border:1px solid var(--rule);border-radius:var(--r);background:#fbfcfd}
@@ -70,7 +70,7 @@ textarea{font-family:var(--mono);font-size:13px;min-height:150px;resize:vertical
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .err{color:var(--bad);background:#fdeceb;border:1px solid #f0c3bf;padding:10px 12px;border-radius:var(--r);margin-top:12px}
 .pair{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
-.pair .field{min-width:190px}
+.pair .field{min-width:min(190px,100%)}
 .pair select{width:100%;padding:9px 10px;border:1px solid var(--rule);border-radius:var(--r);background:#fbfcfd}
 .pair .arrow{padding-bottom:10px;color:var(--muted);font-size:20px}
 .pair-note{font-size:13px;color:var(--muted);margin-top:6px}
@@ -88,9 +88,32 @@ details.sec .agents{margin:0;padding:0 16px 14px}
 .runprog .bar i{display:block;height:100%;background:var(--pg);width:0;transition:width .35s ease}
 .runprog.fail .bar i{background:var(--bad)}
 .runprog.done .bar i{background:var(--ok)}
+.runprog.stopped .bar i{background:var(--warn)}
+.runprog .top .right{display:flex;gap:14px;white-space:nowrap}
+.runprog .clock{font-family:var(--mono);font-size:13px;color:var(--ink)}
+.btn.stop{background:#fff;color:var(--bad);border:1px solid var(--bad)}
+.btn.stop:hover{background:var(--bad);color:#fff}
 .results-head{margin:0 0 12px}
+/* ---------- result tabs ---------- */
+.tabs{display:flex;flex-wrap:wrap;gap:0;border-bottom:2px solid var(--rule);margin:0 0 18px}
+.tab{background:transparent;border:0;border-bottom:3px solid transparent;margin-bottom:-2px;padding:10px 13px;cursor:pointer;font-weight:500;font-size:15px;color:var(--muted);display:flex;gap:8px;align-items:baseline}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--pg)}
+.tab .n{font-size:12px;font-weight:500;background:var(--rule-soft);color:var(--muted);border-radius:99px;padding:0 8px}
+.tab .n.warn{background:#fff3da;color:#7a4e00}
+.tab .n.bad{background:#fdeceb;color:var(--bad)}
+.tabpanel[hidden]{display:none}
+.tabpanel .panel{overflow-wrap:anywhere}
+table.agtab{width:100%;border-collapse:collapse;font-size:14.5px}
+table.agtab th{white-space:nowrap;text-align:left;font-weight:600;font-size:13px;color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--rule)}
+table.agtab td{padding:10px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+table.agtab .nm{font-weight:600;white-space:nowrap}
+table.agtab .nm::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:8px}
+.st{display:inline-block;border-radius:99px;padding:1px 10px;font-size:12.5px;font-weight:500;white-space:nowrap}
+.st.done{background:#e5f3ec;color:#1f5d40}.st.warn{background:#fff3da;color:#7a4e00}.st.err{background:#fdeceb;color:var(--bad)}.st.idle{background:var(--rule-soft);color:var(--muted)}
+.empty{color:var(--muted);padding:8px 0}
 /* ---------- live log ---------- */
-.run{margin-top:26px;display:grid;gap:24px}
+.run{margin-top:26px;display:grid;grid-template-columns:minmax(0,1fr);gap:24px}
 .log{max-height:340px;overflow:auto;font-size:14px;border-top:1px solid var(--rule-soft)}
 .ev{display:grid;grid-template-columns:118px 1fr;gap:10px;padding:5px 0;border-bottom:1px solid var(--rule-soft)}
 .ev .ag{font-weight:500;font-size:13.5px;color:var(--c,#556)}
@@ -154,9 +177,11 @@ details.box summary{cursor:pointer;font-weight:500}
 .finding .high{--c:var(--bad)}.finding .medium{--c:var(--warn)}.finding .low,.finding .info{--c:var(--info)}
 .hidden{display:none!important}
 @media (max-width:980px){
-  .app{grid-template-columns:1fr}
+  .app{grid-template-columns:minmax(0,1fr)}
   .rail{position:static;height:auto;padding:18px}
   .status{margin-top:0;grid-auto-flow:column;gap:18px}
+  .tab{padding:9px 11px;font-size:14px}
+  table.agtab .last{display:none}
   .split,.diff{grid-template-columns:1fr}
   .list{max-height:320px}
 }
@@ -207,14 +232,14 @@ details.box summary{cursor:pointer;font-weight:500}
         <div class="field" style="margin-top:10px"><label for="llm_model">Model for all agents</label>
           <div class="row" style="margin:0"><select id="llm_model"></select><input type="text" id="copilot_model" list="copilot-models" class="hidden" autocomplete="off" spellcheck="false" placeholder="auto"><datalist id="copilot-models"></datalist><button type="button" class="btn ghost" id="ai-test">Test connection</button><span class="hint" id="ai-test-msg" aria-live="polite"></span></div></div>
       </details>
-      <div class="row"><button class="btn" id="run" type="submit">Run analysis</button><span class="hint" id="run-hint"></span></div>
-      <div class="runprog" id="runprog" aria-live="polite"><div class="top"><span id="prog-label">Starting...</span><span id="prog-pct">0%</span></div>
+      <div class="row"><button class="btn" id="run" type="submit">Run analysis</button><button class="btn stop hidden" id="stop" type="button">Stop</button><span class="hint" id="run-hint"></span></div>
+      <div class="runprog" id="runprog" aria-live="polite"><div class="top"><span id="prog-label">Starting...</span><span class="right"><span class="clock" id="prog-clock" title="Time since the run started">0:00</span><span id="prog-pct">0%</span></span></div>
         <div class="bar" role="progressbar" aria-label="Conversion progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="prog-bar"><i id="progress"></i></div></div>
       <div class="err hidden" id="error" role="alert"></div>
     </form>
 
     <section class="run hidden" id="run-area" aria-label="Run">
-      <div class="panel">
+      <div class="panel" id="log-panel">
         <h2 id="run-title">Agents at work</h2>
         <div class="log" id="log" aria-live="polite"></div>
       </div>
@@ -245,6 +270,7 @@ async function boot() {
   initPair();
   initAI();
   selectFlow(FLOWS[0].id);
+  resumeRun();
 }
 function provider() { const r = document.querySelector("#ai-provider input:checked"); return r ? r.value : "anthropic"; }
 function modelValue() { return provider() === "copilot" ? $("#copilot_model").value.trim() : $("#llm_model").value; }
@@ -317,6 +343,7 @@ function renderFlowButtons() {
   $("#flows").onclick = e => { const b = e.target.closest(".flow-btn"); if (b) selectFlow(b.dataset.id); };
 }
 function selectFlow(id) {
+  if (es && RUN && current && id !== current.id) { showError("A run is in progress. Stop it first, then switch."); return; }
   current = FLOWS.find(f => f.id === id);
   document.querySelectorAll(".flow-btn").forEach(b => b.setAttribute("aria-current", b.dataset.id === id));
   $("#flow-desc").textContent = current.description;
@@ -384,38 +411,66 @@ $("#composer").addEventListener("submit", async e => {
   const mode = aiMode();
   if (mode === "none") fd.append("no_ai", "1");
   else { fd.append("llm_model", modelValue()); fd.append("llm_provider", provider()); if (mode === "own") fd.append("llm_key", $("#llm_key").value); else fd.append("access_code", $("#access_code").value); }
-  $("#error").classList.add("hidden"); $("#run").disabled = true; setProgress(0, "Starting...");
+  $("#error").classList.add("hidden"); setRunning(true); setProgress(0, "Starting..."); $("#prog-clock").textContent = "Elapsed 0:00";
   try {
     const r = await fetch("/api/runs", { method: "POST", body: fd });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.detail || "The run could not be started");
-    startStream(j.run_id);
-  } catch (err) { showError(err.message); $("#run").disabled = false; $("#runprog").classList.remove("on"); }
+    startStream(j.run_id, Date.now());
+  } catch (err) { showError(err.message); setRunning(false); stopClock(); $("#runprog").classList.remove("on"); }
 });
+let RUN = null, clockTimer = null, EVENTS = [];
+const fmtDur = sec => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), r = sec % 60; return h ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`; };
+function startClock(t0) {
+  stopClock(); const tick = () => { $("#prog-clock").textContent = "Elapsed " + fmtDur((Date.now() - t0) / 1000); };
+  RUN.t0 = t0; tick(); clockTimer = setInterval(tick, 1000);
+}
+function stopClock(final, label) { if (clockTimer) { clearInterval(clockTimer); clockTimer = null; } if (final != null) $("#prog-clock").textContent = label + " " + fmtDur(final); }
+function remember(id) { try { id ? sessionStorage.setItem("dbc_run", id) : sessionStorage.removeItem("dbc_run"); } catch {} }
+function setRunning(on) { $("#run").disabled = on; $("#stop").classList.toggle("hidden", !on); $("#stop").disabled = false; $("#stop").textContent = "Stop"; }
+$("#stop").onclick = async () => {
+  if (!RUN) return; $("#stop").disabled = true; $("#stop").textContent = "Stopping...";
+  try { await fetch(`/api/runs/${RUN.id}/cancel`, { method: "POST" }); } catch { showError("Could not reach the server to stop the run"); $("#stop").disabled = false; $("#stop").textContent = "Stop"; }
+};
 function setProgress(pct, label, state) {
-  const box = $("#runprog"); box.classList.add("on"); box.classList.toggle("fail", state === "fail"); box.classList.toggle("done", state === "done");
+  const box = $("#runprog"); box.classList.add("on"); box.classList.toggle("fail", state === "fail"); box.classList.toggle("done", state === "done"); box.classList.toggle("stopped", state === "stopped");
   $("#progress").style.width = pct + "%"; $("#prog-pct").textContent = pct + "%"; $("#prog-bar").setAttribute("aria-valuenow", pct);
   if (label) $("#prog-label").textContent = label;
 }
 function showError(m) { const e = $("#error"); e.textContent = m; e.classList.remove("hidden"); }
 
-function startStream(runId) {
-  report = null; selectedId = null;
+function startStream(runId, t0) {
+  report = null; selectedId = null; EVENTS = []; RUN = { id: runId }; remember(runId); setRunning(true);
   $("#run-area").classList.remove("hidden"); $("#results").classList.add("hidden"); $("#results").innerHTML = "";
+  $("#log-panel").classList.remove("hidden");
   $("#log").innerHTML = ""; setProgress(1, "Starting..."); $("#run-title").textContent = "Agents at work";
+  startClock(t0);
   es = new EventSource(`/api/runs/${runId}/events`);
   es.onmessage = m => addEvent(JSON.parse(m.data));
   es.addEventListener("end", async m => {
-    es.close(); es = null; $("#run").disabled = false;
-    const end = JSON.parse(m.data);
-    if (end.status === "error") { showError(end.error || "The run failed"); setProgress(parseInt($("#prog-pct").textContent) || 0, "Stopped: the run failed", "fail"); return; }
-    setProgress(100, "Done", "done"); $("#run-title").textContent = "Agents finished";
-    report = await fetch(`/api/runs/${runId}/result`).then(r => r.json()); report._runId = runId;
+    es.close(); es = null; setRunning(false);
+    const end = JSON.parse(m.data), took = (Date.now() - RUN.t0) / 1000, pct = parseInt($("#prog-pct").textContent) || 0;
+    if (end.status !== "done") remember(null);  // a finished run stays reachable after a refresh; a stopped or failed one does not
+    if (end.status === "cancelled") { stopClock(took, "Stopped after"); setProgress(pct, "Stopped by you. Nothing was saved; start a new run when ready.", "stopped"); $("#run-title").textContent = "Run stopped"; return; }
+    if (end.status === "error") { stopClock(took, "Failed after"); showError(end.error || "The run failed"); setProgress(pct, "Stopped: the run failed", "fail"); return; }
+    stopClock(took, "Completed in"); setProgress(100, "Done", "done"); $("#run-title").textContent = "Agents finished";
+    report = await fetch(`/api/runs/${runId}/result`).then(r => r.json()); report._runId = runId; report._took = took;
     renderReport();
   });
-  es.onerror = () => { if (es && es.readyState === 2) { $("#run").disabled = false; } };
+  es.onerror = () => { if (es && es.readyState === 2) { setRunning(false); stopClock(); } };
+}
+/* A refresh does not lose the run: it keeps going on the server, so reattach to it. */
+async function resumeRun() {
+  let id = null; try { id = sessionStorage.getItem("dbc_run"); } catch {}
+  if (!id) return;
+  try {
+    const r = await fetch(`/api/runs/${id}`); if (!r.ok) throw 0; const j = await r.json();
+    if (j.status === "cancelled" || j.status === "error") { remember(null); return; }
+    selectFlow(j.flow_id); startStream(id, j.created * 1000);
+  } catch { remember(null); }
 }
 function addEvent(ev) {
+  EVENTS.push(ev);
   if (ev.data && ev.data.progress) { const [d, t] = ev.data.progress; setProgress(Math.min(99, Math.round(100 * d / t))); return; }
   if (ev.level === "stage") $("#prog-label").textContent = `${ev.agent}: ${ev.message}`.slice(0, 110);
   const log = $("#log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
@@ -435,8 +490,6 @@ function renderReport() {
   const high = (s.risks || {}).high || 0;
   const dl = f => `/api/runs/${report._runId}/report?format=${f}`;
   const ticks = st.map(x => `<button class="tick ${x.status}" style="height:${Math.max(18, Math.round(x.confidence * 100))}%" data-id="${x.id}" aria-label="${esc(x.label)}: ${STATUS_LABEL[x.status] || x.status}" title="${esc(x.label)}"></button>`).join("");
-  const fnd = report.findings.length ? `<details class="box" ${report.findings.some(f => f.severity === "high") ? "open" : ""}><summary>Security and application findings (${report.findings.length})</summary>` +
-    report.findings.map(f => `<div class="finding"><span class="sev ${f.severity}">${esc(f.severity)}</span> ${esc(f.category)} <code>${esc(f.file)}:${f.line}</code><div>${esc(f.detail)}</div></div>`).join("") + `</details>` : "";
   const prof = (m.files || {}).profile, rd = (m.files || {}).reader;
   const profBox = prof ? `<details class="box" open><summary>Project profile (Code Reader)</summary>
       <p class="hint">Build tool: ${esc(prof.build_tool)} | ${m.files.java || 0} Java, ${m.files.xml || 0} XML, ${m.files.sql || 0} SQL files</p>
@@ -452,38 +505,84 @@ function renderReport() {
       <div class="trace">${orch.trace.map(t => `<b>${esc(t.agent)}</b><span>${esc(t.decision)}${t.reason ? ` <span class="why">- ${esc(t.reason)}</span>` : ""}</span>`).join("")}</div>
     </details>` : "";
   const pr = m.pair || { source_label: "Oracle", target_label: "PostgreSQL", full: true };
-  $("#results").innerHTML = `
-    <h2 class="sec-head results-head" id="results-title">Conversion report: ${esc(pr.source_label)} to ${esc(pr.target_label)}</h2>
-    <div class="panel">
+  const ar = agentRows(), aWarn = ar.filter(r => r.state === "warn" || r.state === "err").length;
+  const chk = report.checklist || [], hiF = report.findings.filter(f => f.severity === "high").length;
+  const tabs = [
+    ["agents", "Agents Status", aWarn ? { n: aWarn + " to look at", c: "warn" } : { n: ar.filter(r => r.state === "done").length + " done" }],
+    ["report", "Conversion Report"],
+    ["orch", "Orchestration"],
+    ["profile", "Project profile", report.findings.length ? { n: report.findings.length, c: hiF ? "bad" : "warn" } : null],
+    ["filters", "Filters", { n: st.length }],
+    ["check", "Migration checklist", { n: chk.length }]];
+  const agentsPanel = `<div class="panel"><h2>Agents status</h2><p class="hint" style="margin-top:0">What each agent did in this run${RUN && report._took ? ", finished in " + fmtDur(report._took) : ""}. The full activity log is at the bottom.</p>
+      <div style="overflow-x:auto"><table class="agtab"><thead><tr><th>Agent</th><th>Status</th><th>Events</th><th>AI calls</th><th class="last">Last message</th></tr></thead><tbody>${ar.map(r => `<tr><td class="nm" style="--c:${AGENT_COLOR[r.name] || "#778"}">${esc(r.name)}</td><td><span class="st ${r.state}">${esc(r.label)}</span></td><td>${r.count}</td><td>${r.calls || "-"}</td><td class="last">${esc(r.last)}</td></tr>`).join("")}</tbody></table></div>
+      <details class="box"><summary>Full activity log (${EVENTS.filter(e => !(e.data && e.data.progress)).length} events)</summary><div class="log" id="log-copy" style="max-height:420px">${$("#log").innerHTML}</div></details></div>`;
+  const reportPanel = `<div class="panel">
       <p class="summary">${esc(report.executive_summary)}</p>
       <div class="ribbon" id="ribbon" role="listbox" aria-label="Statements">${ticks}</div>
-      <div class="legend"><span class="auto">${s.by_status.auto || 0} converted and validated</span><span class="portable">${s.by_status.portable || 0} portable</span><span class="review">${s.by_status.review || 0} to review</span><span class="manual">${s.by_status.manual || 0} manual</span><span style="--c:transparent">taller tick = higher confidence</span></div>
+      <div class="legend"><span class="auto">${s.by_status.auto || 0} converted and validated</span><span class="portable">${s.by_status.portable || 0} portable</span><span class="review">${s.by_status.review || 0} to review</span><span class="manual">${s.by_status.manual || 0} manual</span><span style="--c:transparent">taller tick = higher confidence. Click one to open it.</span></div>
       <div class="facts">
         <div class="fact"><b>${validated} of ${s.statements}</b><span>${m.sandbox.mode === "postgres" ? "planned on PostgreSQL " + esc(String(m.sandbox.version || "").split(" ")[0]) : "syntax-checked (no live database)"}</span></div>
         <div class="fact"><b>${high}</b><span>high-severity risks a passing plan would not catch</span></div>
         <div class="fact"><b>${s.auto_rate_pct}%</b><span>converted without manual rework</span></div>
+        <div class="fact"><b>${fmtDur(report._took != null ? report._took : m.duration_s)}</b><span>time this analysis took</span></div>
         <div class="fact"><b>${e.saved_hours} h</b><span>estimated saving (planning assumptions)</span>
           <div class="effort"><div><span>By hand</span><i style="width:100%"></i><span>${e.baseline_hours} h</span></div><div><span>With tool</span><i style="width:${Math.round(100 * e.assisted_hours / max)}%"></i><span>${e.assisted_hours} h</span></div></div></div>
       </div>
       <div class="row"><a class="btn ghost" href="${dl("html")}">Download report (HTML)</a><a class="btn ghost" href="${dl("md")}">Markdown</a><a class="btn ghost" href="${dl("json")}">JSON</a>
-        <span class="hint">${m.llm.available ? "AI calls: " + m.llm.usage.calls + ", tokens in/out " + m.llm.usage.input_tokens + "/" + m.llm.usage.output_tokens : "Rules-only run (no AI calls)"} | ${m.duration_s}s</span></div>
-    </div>
-    ${orchBox}
-    ${profBox}
-    ${fnd}
-    <div class="split" style="margin-top:20px">
+        <span class="hint">${m.llm.available ? "AI calls: " + m.llm.usage.calls + ", tokens in/out " + m.llm.usage.input_tokens + "/" + m.llm.usage.output_tokens : "Rules-only run (no AI calls)"}</span></div>
+    </div>`;
+  const orchPanel = orchBox ? orchBox.replace("<details class=\"box\" open>", "<div class=\"panel\">").replace("<summary>Orchestration: who decided what</summary>", "<h2>Orchestration: who decided what</h2>").replace(/<\/details>$/, "</div>") : `<div class="panel empty">No orchestration plan for this run (the single-statement converter does not use the Orchestrator).</div>`;
+  const profPanel = `<div class="panel">${profBox ? profBox.replace("<details class=\"box\" open>", "<div>").replace("<summary>Project profile (Code Reader)</summary>", "<h2>Project profile</h2>").replace(/<\/details>$/, "</div>") : `<h2>Project profile</h2><p class="empty">No project was scanned in this run.</p>`}
+      <h3 style="margin-top:18px">Security and application findings (${report.findings.length})</h3>
+      ${report.findings.length ? report.findings.map(f => `<div class="finding"><span class="sev ${f.severity}">${esc(f.severity)}</span> ${esc(f.category)} <code>${esc(f.file)}:${f.line}</code><div>${esc(f.detail)}</div></div>`).join("") : `<p class="empty">No findings.</p>`}</div>`;
+  const filtersPanel = `<div class="split">
       <div class="list"><div class="list-head"><div class="chips" id="filters">${FILTERS.map(([k, label]) => `<button type="button" class="chip" data-k="${k}" aria-pressed="${k === "all"}">${label} (${k === "all" ? st.length : st.filter(x => x.status === k).length})</button>`).join("")}</div><input type="text" id="q" placeholder="Search by name or file" aria-label="Search statements"></div><div id="items"></div></div>
-      <div class="detail" id="detail"></div>
-    </div>
-    <details class="box"><summary>Migration checklist for the rest of the application</summary><ul class="plain">${report.checklist.map(c => `<li>${esc(c)}</li>`).join("")}</ul></details>`;
+      <div class="detail" id="detail"></div></div>`;
+  const checkPanel = `<div class="panel"><h2>Migration checklist for the rest of the application</h2>${chk.length ? `<ul class="plain">${chk.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : `<p class="empty">Nothing to add.</p>`}</div>`;
+  const panels = { agents: agentsPanel, report: reportPanel, orch: orchPanel, profile: profPanel, filters: filtersPanel, check: checkPanel };
+  $("#results").innerHTML = `
+    <h2 class="sec-head results-head" id="results-title">Conversion report: ${esc(pr.source_label)} to ${esc(pr.target_label)}</h2>
+    <div class="tabs" role="tablist" aria-label="Results" id="tabs">${tabs.map(([k, label, b]) => `<button class="tab" role="tab" id="tab-${k}" aria-controls="pane-${k}" aria-selected="false" tabindex="-1" data-k="${k}">${label}${b ? ` <span class="n ${b.c || ""}">${esc(b.n)}</span>` : ""}</button>`).join("")}</div>
+    ${tabs.map(([k]) => `<div class="tabpanel" role="tabpanel" id="pane-${k}" aria-labelledby="tab-${k}" hidden>${panels[k]}</div>`).join("")}`;
   $("#results").classList.remove("hidden");
-  $("#ribbon").onclick = e => { const t = e.target.closest(".tick"); if (t) select(t.dataset.id, true); };
+  $("#log-panel").classList.add("hidden");  // the log now lives in the Agents Status tab
+  $("#tabs").onclick = e => { const t = e.target.closest(".tab"); if (t) showTab(t.dataset.k); };
+  $("#tabs").onkeydown = e => {
+    const ks = tabs.map(t => t[0]), i = ks.indexOf(document.activeElement.dataset.k); if (i < 0) return;
+    const j = { ArrowRight: (i + 1) % ks.length, ArrowLeft: (i + ks.length - 1) % ks.length, Home: 0, End: ks.length - 1 }[e.key];
+    if (j != null) { e.preventDefault(); showTab(ks[j]); $("#tab-" + ks[j]).focus(); }
+  };
+  $("#ribbon").onclick = e => { const t = e.target.closest(".tick"); if (t) { showTab("filters"); select(t.dataset.id, false); $("#detail").scrollIntoView({ block: "start", behavior: "smooth" }); } };
   $("#filters").onclick = e => { const c = e.target.closest(".chip"); if (!c) return; filter = c.dataset.k; document.querySelectorAll("#filters .chip").forEach(x => x.setAttribute("aria-pressed", x === c)); renderItems(); };
   $("#q").oninput = e => { query = e.target.value.toLowerCase(); renderItems(); };
   filter = "all"; query = "";
   renderItems();
   const first = st.find(x => x.status === "manual") || st.find(x => x.status === "review") || st[0];
   if (first) select(first.id, false);
+  showTab("report");
+}
+function showTab(k) {
+  document.querySelectorAll("#tabs .tab").forEach(t => { const on = t.dataset.k === k; t.setAttribute("aria-selected", on); t.tabIndex = on ? 0 : -1; });
+  document.querySelectorAll("#results .tabpanel").forEach(p => { p.hidden = p.id !== "pane-" + k; });
+}
+/* One row per agent, built from the events the run emitted. */
+function agentRows() {
+  const names = current.agents.map(a => a.name), by = {};
+  EVENTS.filter(e => !(e.data && e.data.progress)).forEach(e => { (by[e.agent] = by[e.agent] || []).push(e); });
+  const usage = ((report.meta.llm || {}).usage || {}).by_agent || {};
+  const rows = names.map(n => {
+    const ev = by[n] || [], err = ev.filter(e => e.level === "error").length, warn = ev.filter(e => e.level === "warn").length;
+    const state = !ev.length ? "idle" : err ? "err" : warn ? "warn" : "done";
+    const label = !ev.length ? "Not needed" : err ? `${err} failed` : warn ? `Done, ${warn} warning${warn > 1 ? "s" : ""}` : "Done";
+    const last = ev.length ? (ev.slice().reverse().find(e => e.level !== "stage") || ev[ev.length - 1]).message : "Not used in this run";
+    return { name: n, count: ev.length, state, label, last: last.slice(0, 150), calls: (usage[n] || {}).calls };
+  });
+  Object.keys(by).filter(n => !names.includes(n) && n !== "Platform").forEach(n => {  // e.g. Security or Intake
+    const ev = by[n], warn = ev.filter(e => e.level === "warn").length;
+    rows.push({ name: n, count: ev.length, state: warn ? "warn" : "done", label: warn ? `Done, ${warn} warning${warn > 1 ? "s" : ""}` : "Done", last: ev[ev.length - 1].message.slice(0, 150), calls: (usage[n] || {}).calls });
+  });
+  return rows;
 }
 function renderItems() {
   const items = report.statements.filter(x => (filter === "all" || x.status === filter) && (!query || (x.label + " " + x.file).toLowerCase().includes(query)));
