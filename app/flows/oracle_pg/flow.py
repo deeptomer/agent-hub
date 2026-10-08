@@ -15,8 +15,9 @@ from app.core.registry import FlowDef, RunContext, register
 from app.core.security import Finding, UnsafeInput, fetch_github_zip, safe_extract_zip
 from app.flows.oracle_pg import extract, reader
 from app.flows.oracle_pg.constructs import detect, tier_for
-from app.flows.oracle_pg.llm_agents import review_with_llm, summarise_with_llm
+from app.flows.oracle_pg.llm_agents import critique_with_llm, plan_with_llm, review_with_llm, summarise_with_llm, triage_with_llm
 from app.flows.oracle_pg.models import Stmt
+from app.flows.oracle_pg.orchestrator import Plan
 from app.flows.oracle_pg.report import build_report
 from app.flows.oracle_pg.risk import assess, finalize, merge_risks
 from app.flows.oracle_pg.rules import SchemaInfo, schema_from_ddl
@@ -33,6 +34,9 @@ class FlowState(TypedDict, total=False):
     schema: SchemaInfo
     pipeline: StmtPipeline
     report: dict
+    plan: Plan
+    done: list[str]
+    next: str
 
 
 def _order_ddl(ddl: list[Stmt]) -> list[Stmt]:
@@ -78,21 +82,25 @@ def _setup_sandbox(ctx: RunContext) -> Sandbox:
     return sb
 
 
-def _review(ctx: RunContext, stmts: list[Stmt], schema: SchemaInfo) -> None:
+def _review(ctx: RunContext, stmts: list[Stmt], schema: SchemaInfo, depth: str = "non_trivial",
+            focus: list[str] | None = None) -> None:
     done = [0]
 
     def one(s: Stmt) -> None:
         rule_risks = assess(s)
         llm_risks = []
-        wants_llm = s.status != "portable" and (s.tier != "trivial" or s.method != "rules" or s.kind in ("plsql", "jdbc_call"))
+        non_trivial = s.tier != "trivial" or s.method != "rules" or s.kind in ("plsql", "jdbc_call")
+        wants_llm = s.status != "portable" and depth != "rules_only" and (non_trivial or depth == "all")
         if ctx.llm.available and wants_llm and s.pg_sql:
-            llm_risks = review_with_llm(ctx.llm, s, schema)
+            llm_risks = review_with_llm(ctx.llm, s, schema, focus)
         s.risks = merge_risks(rule_risks, llm_risks)
         finalize(s)
         done[0] += 1
 
     ctx.emit("Risk Reviewer", f"Reviewing {len(stmts)} statements for semantic differences"
-             + (" (rules + Claude on the non-trivial ones)" if ctx.llm.available else " (rules only; no LLM configured)"), "stage")
+             + ({"all": " (rules + Claude on every non-portable statement)", "non_trivial": " (rules + Claude on the non-trivial ones)",
+                 "rules_only": " (rules only, as planned by the Orchestrator)"}[depth] if ctx.llm.available else " (rules only; no LLM configured)"),
+             "stage")
     _parallel(one, stmts, settings.llm_concurrency)
     high = sum(1 for s in stmts for r in s.risks if r.severity == "high")
     med = sum(1 for s in stmts for r in s.risks if r.severity == "medium")
@@ -114,8 +122,16 @@ def _summary_text(ctx: RunContext, stmts: list[Stmt], findings: list[Finding]) -
 
 # ------------------------------------------------------------------------------------------- flow 1
 def run_migration(ctx: RunContext) -> dict[str, Any]:
+    """Supervisor graph. The Orchestrator node decides which worker agent runs next; every worker returns to it.
+    With Claude available the Orchestrator also plans the run (how much AI to use, where to focus) after discovery and
+    triages failures before the Critic gets involved. Without Claude it follows a deterministic default plan."""
     started = time.time()
     sandbox: Sandbox | None = None
+    trace: list[dict[str, Any]] = []
+
+    def note(step: str, agent: str, decision: str, reason: str = "") -> None:
+        trace.append({"step": step, "agent": agent, "decision": decision, "reason": reason, "t": round(time.time() - started, 1)})
+
     try:
         def intake(state: FlowState) -> FlowState:
             src = ctx.inputs.get("source", "sample")
@@ -131,8 +147,10 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
                 try:
                     if src == "github":
                         url = str(ctx.inputs.get("github_url", ""))
-                        ctx.emit("Intake", f"Fetching public repository {url}", "info")
-                        data, name = fetch_github_zip(url, settings.max_upload_bytes), url
+                        ctx.emit("Intake", f"Fetching repository {url}", "info")
+                        token = ctx.inputs.pop("github_token", None)  # used once, then dropped from memory
+                        data, name = fetch_github_zip(url, settings.max_upload_bytes, token), url
+                        ctx.emit("Intake", "Used your GitHub token for this download only" if token else "No token: public repositories only", "info")
                     else:
                         data, name = ctx.inputs["upload_bytes"], ctx.inputs.get("filename", "upload.zip")
                     n = safe_extract_zip(data, dest, max_files=settings.max_files)
@@ -142,15 +160,13 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
                     raise RuntimeError("No Java, XML or SQL files found in the archive")
                 ctx.emit("Intake", f"Accepted {n} source files (allow-listed types only, size-limited, zip-slip checked)", "ok")
                 root = dest
-            return {"root": root, "source_name": name}
+            return {"root": root, "source_name": name, "done": ["intake"]}
 
         def discover(state: FlowState) -> FlowState:
             ctx.emit("Discovery", "Scanning Java, MyBatis XML, JPA native queries and SQL / PL/SQL scripts", "stage")
             stmts, findings, stats = extract.discover(state["root"], lambda a, m, l="info", **d: ctx.emit(a, m, l, **d),
                                                        settings.max_statements)
             from collections import Counter
-            ctx.emit("Code Reader", "Profiling the project and looking for SQL assembled in code", "stage")
-            stmts = reader.run_reader(state["root"], stmts, findings, stats, ctx.llm, lambda a, m, l="info", **d: ctx.emit(a, m, l, **d))
             kinds = Counter(s.kind for s in stmts)
             ctx.emit("Discovery", f"Found {len(stmts)} statements ({', '.join(f'{v} {k}' for k, v in kinds.items())})", "ok",
                      kinds=dict(kinds))
@@ -163,16 +179,44 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
             hi = sum(1 for f in findings if f.severity == "high" and "injection" not in f.category.lower())
             if hi:
                 ctx.emit("Security", f"{hi} high-severity application finding(s) (dynamic SQL, credentials, Oracle-only APIs)", "warn")
-            return {"stmts": stmts, "findings": findings, "stats": stats}
+            return {"stmts": stmts, "findings": findings, "stats": stats, "done": state["done"] + ["discover"]}
 
-        def migrate_schema(state: FlowState) -> FlowState:
+        def plan(state: FlowState) -> Plan:
+            """Orchestrator decision 1: how much of the AI team does this project need?"""
+            from app.flows.oracle_pg import orchestrator as orch
+            stats = state["stats"]
+            if "reader" not in stats:  # cheap deterministic probe so the plan can use it
+                files = sorted(p for p in state["root"].rglob("*") if p.is_file())
+                gaps = reader.find_gaps(state["root"], files, state["stmts"])
+                stats["reader"] = {"gap_files": len(gaps), "gap_fragments": sum(len(v) for v in gaps.values())}
+            inv = orch.build_inventory(state["stmts"], state["findings"], stats, ctx.llm.available)
+            raw = plan_with_llm(ctx.llm, inv) if ctx.llm.available else None
+            p = orch.sanitize_plan(raw, inv)
+            if ctx.llm.available and raw is None:
+                ctx.emit("Orchestrator", f"Planning call failed ({ctx.llm.last_error}); using the default plan", "warn")
+            ctx.emit("Orchestrator", f"Plan ({p.source}): Code Reader {'on' if p.run_code_reader else 'off'}, review depth {p.review_depth}, "
+                                     f"Critic {'on' if p.run_critic else 'off'}, up to {p.max_repairs} repair(s). {p.rationale}", "ok", plan=p.to_dict())
+            if p.focus:
+                ctx.emit("Orchestrator", "Risk Reviewer focus: " + "; ".join(p.focus), "info")
+            note("plan", "Orchestrator", f"{p.source} plan", p.rationale)
+            return p
+
+        def reader_node(state: FlowState) -> FlowState:
+            ctx.emit("Code Reader", "Profiling the project and looking for SQL assembled in code", "stage")
+            p: Plan = state["plan"]
+            stmts = reader.run_reader(state["root"], state["stmts"], state["findings"], state["stats"], ctx.llm,
+                                      lambda a, m, l="info", **d: ctx.emit(a, m, l, **d), use_llm=p.run_code_reader)
+            note("code_reader", "Code Reader", f"{state['stats'].get('reader', {}).get('reconstructed', 0)} statements reconstructed")
+            return {"stmts": stmts, "done": state["done"] + ["reader"]}
+
+        def schema_node(state: FlowState) -> FlowState:
             nonlocal sandbox
             sandbox = _setup_sandbox(ctx)
             stmts = state["stmts"]
             ddl = [s for s in stmts if s.kind == "ddl"]
             schema = schema_from_ddl([s.oracle_sql for s in ddl])
             pipe = StmtPipeline(llm=ctx.llm, sandbox=sandbox, schema=schema,
-                                emit=lambda a, m, l="info", **d: ctx.emit(a, m, l, **d), max_repairs=settings.max_repair_attempts)
+                                emit=lambda a, m, l="info", **d: ctx.emit(a, m, l, **d), max_repairs=state["plan"].max_repairs)
             if ddl:
                 ctx.emit("Converter", f"Converting and applying {len(ddl)} schema statements in dependency order", "stage")
                 for s in _order_ddl(ddl):
@@ -181,16 +225,18 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
                     live = sandbox.introspect()
                     if live.tables:
                         schema.tables = {t: {c: ty for c, ty in cols.items()} for t, cols in live.tables.items()}
-            return {"schema": schema, "pipeline": pipe}
+            note("schema", "Converter", f"{len(ddl)} schema statements")
+            return {"schema": schema, "pipeline": pipe, "done": state["done"] + ["schema"]}
 
-        def convert_plsql(state: FlowState) -> FlowState:
+        def plsql_node(state: FlowState) -> FlowState:
             units = [s for s in state["stmts"] if s.kind == "plsql"]
             if units:
                 ctx.emit("Converter", f"Converting {len(units)} PL/SQL unit(s) to PL/pgSQL", "stage")
                 _parallel(state["pipeline"].run, units, settings.llm_concurrency)
-            return {}
+            note("plsql", "Converter", f"{len(units)} PL/SQL units")
+            return {"done": state["done"] + ["plsql"]}
 
-        def convert_queries(state: FlowState) -> FlowState:
+        def queries_node(state: FlowState) -> FlowState:
             qs = [s for s in state["stmts"] if s.kind not in ("ddl", "plsql")]
             ctx.emit("Converter", f"Converting {len(qs)} queries / DML statements (rules first, Claude for the hard ones)", "stage")
             counter = [0]
@@ -203,34 +249,104 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
             # jdbc_call statements depend on PL/SQL results, so they go last
             _parallel(one, [s for s in qs if s.kind != "jdbc_call"], settings.llm_concurrency)
             _parallel(one, [s for s in qs if s.kind == "jdbc_call"], 1)
-            return {}
+            note("queries", "Converter", f"{len(qs)} statements")
+            return {"done": state["done"] + ["queries"]}
 
-        def review(state: FlowState) -> FlowState:
-            _review(ctx, state["stmts"], state["schema"])
-            return {}
+        def critic_node(state: FlowState) -> FlowState:
+            """Orchestrator decision 2 (triage) -> Critic diagnoses -> Converter retries -> Validator -> Risk Reviewer."""
+            from app.flows.oracle_pg import orchestrator as orch
+            stmts, pipe, schema, p = state["stmts"], state["pipeline"], state["schema"], state["plan"]
+            failing = orch.failing_statements(stmts)
+            if not failing:
+                ctx.emit("Critic", "Nothing is failing validation; no second opinion needed", "ok")
+                note("critic", "Critic", "skipped: nothing failing")
+                return {"done": state["done"] + ["critic"]}
+            ctx.emit("Orchestrator", f"{len(failing)} statement(s) still fail or need manual work; deciding which are worth one more attempt", "stage")
+            tri = triage_with_llm(ctx.llm, orch.triage_payload(failing)) or {}
+            by_id = {s.id: s for s in failing}
+            retry = [by_id[i] for i in dict.fromkeys(tri.get("retry_ids", [])) if i in by_id][:6]
+            note("triage", "Orchestrator", f"retry {len(retry)} of {len(failing)}", str(tri.get("rationale", ""))[:300])
+            ctx.emit("Orchestrator", f"Retrying {len(retry)} of {len(failing)}: {str(tri.get('rationale', 'no rationale'))[:200]}", "info")
+            fixed = 0
 
-        def report(state: FlowState) -> FlowState:
+            def work(s: Stmt) -> None:
+                nonlocal fixed
+                crit = critique_with_llm(ctx.llm, s, schema)
+                if not crit:
+                    return
+                if crit.get("give_up"):
+                    s.notes.append(f"Critic: needs a human. {str(crit.get('give_up_reason') or crit.get('diagnosis', ''))[:240]}")
+                    ctx.emit("Critic", f"{s.id} {s.label}: needs a human ({str(crit.get('give_up_reason') or crit.get('diagnosis', ''))[:140]})", "warn", id=s.id)
+                    return
+                ctx.emit("Critic", f"{s.id} {s.label}: {str(crit.get('diagnosis', ''))[:160]}", "info", id=s.id)
+                s.meta["critic_hint"] = str(crit.get("instruction", ""))[:700]
+                s.notes.append(f"Critic diagnosis: {str(crit.get('diagnosis', ''))[:240]}")
+                s.attempts = 0
+                before = s.validation.get("status")
+                pipe.run(s)
+                s.meta.pop("critic_hint", None)
+                if before == "failed" and s.validation.get("status") in ("ok", "inconclusive"):
+                    fixed += 1
+                    s.notes.append("Fixed after the Critic's second opinion")
+
+            _parallel(work, retry, settings.llm_concurrency)
+            if retry:
+                _review(ctx, retry, schema, p.review_depth, p.focus)  # refresh risks and status for the retried ones only
+            ctx.emit("Critic", f"Second round finished: {fixed} of {len(retry)} retried statement(s) now pass", "ok" if fixed else "info")
+            note("critic", "Critic", f"{fixed} of {len(retry)} fixed")
+            return {"done": state["done"] + ["critic"]}
+
+        def review_node(state: FlowState) -> FlowState:
+            p: Plan = state["plan"]
+            _review(ctx, state["stmts"], state["schema"], p.review_depth, p.focus)
+            note("review", "Risk Reviewer", f"depth {p.review_depth}")
+            return {"done": state["done"] + ["review"]}
+
+        def report_node(state: FlowState) -> FlowState:
             ctx.emit("Report", "Assembling report, effort estimate and migration checklist", "stage")
             summary_text = _summary_text(ctx, state["stmts"], state["findings"])
             rep = build_report(run_id=ctx.run.id, source_name=state["source_name"], stmts=state["stmts"], findings=state["findings"],
                                stats=state["stats"], sandbox=sandbox, llm=ctx.llm, started=started, executive_summary=summary_text)
+            rep["meta"]["orchestration"] = {"plan": state["plan"].to_dict(), "trace": trace, "ai": ctx.llm.describe()}
             s = rep["summary"]
             ctx.emit("Report", f"{s['auto_rate_pct']}% auto/portable, {s['by_status'].get('review', 0)} to review, "
                                f"{s['by_status'].get('manual', 0)} manual; effort {s['effort']['assisted_hours']} h vs "
                                f"{s['effort']['baseline_hours']} h by hand", "ok")
-            return {"report": rep}
+            note("report", "Report", "done")
+            return {"report": rep, "done": state["done"] + ["report"]}
 
+        # ---- the supervisor: after every worker, decide who is next
+        def orchestrator_node(state: FlowState) -> FlowState:
+            done = state.get("done", [])
+            out: FlowState = {}
+            if "discover" in done and not state.get("plan"):
+                out["plan"] = plan(state)
+            p = out.get("plan") or state.get("plan")
+            nxt = "intake"
+            for step in ("intake", "discover", "reader", "schema", "plsql", "queries", "review", "critic", "report"):
+                if step in done:
+                    continue
+                if step == "critic" and (not p or not p.run_critic or not ctx.llm.available):
+                    continue
+                if step == "plsql" and not any(s.kind == "plsql" for s in state.get("stmts", [])):
+                    continue
+                nxt = step
+                break
+            out["next"] = nxt
+            return out
+
+        workers = {"intake": intake, "discover": discover, "reader": reader_node, "schema": schema_node, "plsql": plsql_node,
+                   "queries": queries_node, "review": review_node, "critic": critic_node, "report": report_node}
         g = StateGraph(FlowState)
-        for name, fn in [("intake", intake), ("discover", discover), ("migrate_schema", migrate_schema),
-                         ("convert_plsql", convert_plsql), ("convert_queries", convert_queries),
-                         ("review", review), ("report", report)]:
+        g.add_node("orchestrator", orchestrator_node)
+        for name, fn in workers.items():
             g.add_node(name, fn)
-        g.set_entry_point("intake")
-        order = ["intake", "discover", "migrate_schema", "convert_plsql", "convert_queries", "review", "report"]
-        for a, b in zip(order, order[1:]):
-            g.add_edge(a, b)
+            if name != "report":
+                g.add_edge(name, "orchestrator")
+        g.set_entry_point("orchestrator")
+        g.add_conditional_edges("orchestrator", lambda st: st["next"], {**{k: k for k in workers}})
         g.add_edge("report", END)
-        final = g.compile().invoke({})
+        final = g.compile().invoke({"done": []}, {"recursion_limit": 60})
         return final["report"]
     finally:
         if sandbox is not None:
@@ -286,10 +402,12 @@ def run_snippet(ctx: RunContext) -> dict[str, Any]:
 
 # ------------------------------------------------------------------------------------------- registration
 AGENTS = [
+    {"name": "Orchestrator", "role": "The supervisor: plans how much of the AI team this project needs, routes work between agents, and triages failures for a second attempt."},
     {"name": "Discovery", "role": "Finds every SQL statement in Java, MyBatis XML, JPA and SQL files; tags Oracle constructs; scans for prompt injection and unsafe SQL."},
-    {"name": "Code Reader", "role": "Profiles a new Java project (frameworks, build tool, where the SQL lives) and has Claude reconstruct SQL that the code assembles at runtime (StringBuilder chains, string formatting, helper methods)."},
-    {"name": "Converter", "role": "Rules engine (sqlglot + custom rewrites) first; Claude only for what the rules cannot do; repair loop on validator errors."},
+    {"name": "Code Reader", "role": "Profiles a new Java project (frameworks, build tool, where the SQL lives) and has Claude reconstruct SQL that the code assembles at runtime."},
+    {"name": "Converter", "role": "Rules engine (sqlglot plus custom rewrites) first; Claude only for what the rules cannot do; repair loop on validator errors."},
     {"name": "Validator", "role": "Plans every converted statement on a real PostgreSQL sandbox (EXPLAIN only, rolled back, time-limited)."},
+    {"name": "Critic", "role": "Diagnoses statements that still fail and gives the Converter a concrete instruction for one more attempt, or hands them to a human."},
     {"name": "Risk Reviewer", "role": "Flags semantic differences that still run: '' vs NULL, ROWNUM order, DATE time part, concat NULLs, transactions."},
     {"name": "Report", "role": "Confidence per statement, effort estimate vs manual, application checklist, downloadable report."},
 ]
@@ -310,6 +428,9 @@ register(FlowDef(
         {"name": "upload", "type": "file", "label": "Repository zip", "show_when": {"source": "upload"}},
         {"name": "github_url", "type": "text", "label": "GitHub URL", "placeholder": "https://github.com/owner/repo",
          "show_when": {"source": "github"}},
+        {"name": "github_token", "type": "secret", "label": "GitHub personal access token (only for private repositories)",
+         "optional": True, "show_when": {"source": "github"},
+         "hint": "Fine-grained token with read-only Contents access. Used for this download only; never stored or logged."},
     ],
     runner=run_migration,
 ))

@@ -46,8 +46,9 @@ class FakeLLM:
     """Stands in for Claude so the agent plumbing (escalation, repair loop, guards) can be tested offline.
     `answers` maps a substring of the user prompt to the tool input to return."""
 
-    def __init__(self, answers=None, review=None):
+    def __init__(self, answers=None, review=None, tool_answers=None):
         self.answers = answers or {}
+        self.tool_answers = tool_answers or {}  # tool name -> dict or callable(user): for Orchestrator / Critic / triage
         self.review = review or []
         self.calls = []
         self.usage = {}
@@ -55,6 +56,11 @@ class FakeLLM:
         self.disabled = False
 
     available = True
+    key_source = "server"
+    model_override = None
+
+    def describe(self):
+        return {"key_source": self.key_source, "model": "per-agent defaults"}
 
     def call_tool(self, *, agent, model, system, user, tool_name, tool_description, schema, max_tokens=0):
         self.calls.append((agent, tool_name, user))
@@ -62,6 +68,11 @@ class FakeLLM:
             return {"risks": self.review}
         if tool_name == "submit_summary":
             return {"summary": "fake summary"}
+        if tool_name in self.tool_answers:
+            ans = self.tool_answers[tool_name]
+            return ans(user) if callable(ans) else ans
+        if tool_name in ("submit_plan", "submit_triage", "submit_critique"):
+            return None
         for needle, ans in self.answers.items():
             if needle in user:
                 if callable(ans):

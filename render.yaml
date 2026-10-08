@@ -21,3 +21,9 @@ services:
         value: claude-sonnet-5-5
       - key: MODEL_REVIEWER
         value: claude-sonnet-5-5
+      - key: LLM_PROVIDER
+        value: anthropic       # or "copilot" to make GitHub Copilot the default backend
+      - key: COPILOT_GITHUB_TOKEN
+        sync: false            # optional server-side token for Copilot (fine-grained github_pat_..., 'Copilot Requests')
+      - key: COPILOT_MODEL
+        value: auto
