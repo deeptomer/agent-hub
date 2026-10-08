@@ -107,3 +107,31 @@ def test_access_code_gates_llm_not_the_app(client, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     r = client.post("/api/runs", data={"flow_id": "sql-snippet-converter", "sql": "SELECT 1 FROM DUAL", "access_code": "wrong"})
     assert r.status_code == 200 and r.json()["ai_assist"] is False
+
+
+def test_database_pair_validation_and_generic_snippet(client):
+    cfg = client.get("/api/config").json()
+    ids = {d["id"] for d in cfg["dialects"]["list"]}
+    assert {"oracle", "postgresql", "mysql", "sqlserver", "snowflake", "bigquery"} <= ids
+    base = {"flow_id": "sql-snippet-converter", "sql": "SELECT 1 FROM t"}
+    assert client.post("/api/runs", data={**base, "source_db": "oracle", "target_db": "oracle"}).status_code == 400
+    assert client.post("/api/runs", data={**base, "source_db": "oracle", "target_db": "nope"}).status_code == 400
+    assert client.post("/api/runs", data={"flow_id": "oracle-java-migration", "source": "sample", "source_db": "mysql",
+                                          "target_db": "postgresql"}).status_code == 400
+    r = client.post("/api/runs", data={"flow_id": "sql-snippet-converter", "sql": "SELECT IFNULL(a, 0) FROM t LIMIT 5, 10",
+                                       "source_db": "mysql", "target_db": "postgresql"})
+    rid = r.json()["run_id"]
+    assert _wait(client, rid)["status"] == "done"
+    res = client.get(f"/api/runs/{rid}/result").json()
+    st = res["statements"][0]
+    assert res["meta"]["pair"]["target_label"] == "PostgreSQL" and "OFFSET 5" in st["pg_sql"]
+    assert st["validation"]["mode"] == "syntax-only" and st["status"] != "auto"  # never claims a live validation
+
+
+def test_progress_events_reach_100_for_full_run(client):
+    rid = client.post("/api/runs", data={"flow_id": "oracle-java-migration", "source": "sample"}).json()["run_id"]
+    assert _wait(client, rid)["status"] == "done"
+    text = client.get(f"/api/runs/{rid}/events").text
+    import re
+    vals = [int(x) for x in re.findall(r'"progress": \[(\d+), 100\]', text)]
+    assert vals and vals == sorted(vals) and max(vals) == 100

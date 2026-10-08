@@ -1,4 +1,4 @@
-# Agent Hub — Oracle → PostgreSQL migration agents
+# Data Base Converter
 
 A small platform that hosts several agent *flows*. The first flow migrates the SQL of a Java application
 from Oracle to PostgreSQL; the second converts a single pasted statement.
@@ -34,6 +34,14 @@ With Claude available the Orchestrator agent also (1) writes a plan after discov
 review depth, repair budget, what the Risk Reviewer should focus on) and (2) triages statements that still fail, so the
 Critic agent only gets those worth another try. Plans are clamped in code (`orchestrator.py`): the model cannot disable
 validation or exceed the repair cap. Without Claude, a deterministic default plan runs. The report shows the plan and a trace.
+
+## Choosing the databases
+Pick **Convert from** and **Convert to** at the top of the form (Oracle, PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, Snowflake,
+BigQuery, Redshift, Databricks SQL, Teradata; list in `app/core/dialects.py`).
+* **Oracle to PostgreSQL** is the full pipeline: custom rules, PL/SQL, risk rules and a real EXPLAIN check on a PostgreSQL sandbox.
+* **Every other pair** uses the generic pipeline (`generic.py`): sqlglot transpile, AI for what it cannot do, a syntax check in the
+  target dialect and a repair loop. There is no live target database, so these results are never marked "validated", only "review".
+* The bundled sample projects are Oracle apps, so they are offered only when Oracle is the source.
 
 ## AI backends: Claude or GitHub Copilot
 Every agent calls one function (`LLM.call_tool` in `app/core/llm.py`), so the backend is switchable per run in the

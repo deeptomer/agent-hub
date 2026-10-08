@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.core import registry
 from app.core.events import store
+from app.core import dialects
 from app.core.llm import PROVIDERS, check_connection, check_copilot, copilot_token_problem
 from app.flows.oracle_pg import flow as _flows  # noqa: F401  (registers the flows)
 from app.flows.oracle_pg.report import to_html, to_markdown
@@ -47,7 +48,7 @@ def _server_key(provider: str) -> str | None:
     return settings.copilot_token if provider == "copilot" else settings.anthropic_api_key
 _checks: dict[str, list[float]] = {}
 STATIC = Path(__file__).parent / "static"
-app = FastAPI(title="Agent Hub: Oracle to PostgreSQL", version="1.0")
+app = FastAPI(title="Data Base Converter", version="1.0")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -72,6 +73,7 @@ def healthz() -> dict:
 def config() -> dict:
     return {
         "llm_configured": bool(settings.anthropic_api_key),
+        "dialects": dialects.public(),
         "default_provider": settings.llm_provider,
         "server_keys": {"anthropic": bool(settings.anthropic_api_key), "copilot": bool(settings.copilot_token)},
         "copilot_model": settings.copilot_model,
@@ -119,6 +121,8 @@ async def create_run(
     llm_key: str = Form(""),
     llm_model: str = Form(""),
     llm_provider: str = Form(""),
+    source_db: str = Form(dialects.DEFAULT_SOURCE),
+    target_db: str = Form(dialects.DEFAULT_TARGET),
     github_token: str = Form(""),
     no_ai: str = Form(""),
     file: UploadFile | None = File(None),
@@ -132,7 +136,13 @@ async def create_run(
     if store.recent_for_ip(ip) >= settings.runs_per_hour_per_ip:
         raise HTTPException(429, "Run limit reached for this hour.")
 
-    inputs: dict = {"source": source, "github_url": github_url, "sql": sql, "schema_sql": schema_sql}
+    source_db, target_db = source_db.strip().lower() or dialects.DEFAULT_SOURCE, target_db.strip().lower() or dialects.DEFAULT_TARGET
+    if problem := dialects.validate_pair(source_db, target_db):
+        raise HTTPException(400, problem)
+    if flow_id == "oracle-java-migration" and source in ("sample", "sample2") and source_db != "oracle":
+        raise HTTPException(400, "The bundled sample projects use Oracle. Upload your own project or choose Oracle as the source database.")
+    inputs: dict = {"source": source, "github_url": github_url, "sql": sql, "schema_sql": schema_sql,
+                    "source_db": source_db, "target_db": target_db}
     if flow_id == "oracle-java-migration" and source == "upload":
         if file is None:
             raise HTTPException(400, "Choose a .zip file to upload")

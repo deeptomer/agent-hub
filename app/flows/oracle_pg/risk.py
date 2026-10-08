@@ -165,6 +165,8 @@ def finalize(stmt: Stmt) -> None:
         base = 0.55
     else:
         base = 0.15
+    if stmt.meta.get("syntax_only_target"):
+        base = min(base, 0.75)  # nothing was executed on a target database, so never "auto"
     for r in stmt.risks:
         base -= {"high": 0.22, "medium": 0.08, "low": 0.02}.get(r.severity, 0)
     if stmt.residual and v != "ok":

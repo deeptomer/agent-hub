@@ -105,7 +105,7 @@ class StmtPipeline:
                 return "llm"
             if s.pg_sql is None:
                 s.validation = {"status": "skipped", "mode": self.sandbox.mode,
-                                "error": "needs the LLM converter, which is not configured (set ANTHROPIC_API_KEY)"}
+                                "error": "needs the AI converter, which is not configured for this run"}
                 return "end"
         return "validate"
 
