@@ -35,6 +35,13 @@ review depth, repair budget, what the Risk Reviewer should focus on) and (2) tri
 Critic agent only gets those worth another try. Plans are clamped in code (`orchestrator.py`): the model cannot disable
 validation or exceed the repair cap. Without Claude, a deterministic default plan runs. The report shows the plan and a trace.
 
+## Running, stopping and results
+
+- The progress bar shows a live "Elapsed m:ss" clock and, when the run ends, "Completed in m:ss".
+- **Stop** ends a run on the server (`POST /api/runs/{id}/cancel`). The run stops at its next step or before its next AI call, the PostgreSQL sandbox schema is dropped, and nothing is kept. An AI request already in flight finishes on its own but its answer is discarded.
+- A page refresh does not stop a run. The page reattaches to it (the run id is kept in the browser tab's session storage, never your key or token). A finished run is shown again after a refresh until the server restarts.
+- Results are in six tabs: Agents Status, Conversion Report, Orchestration, Project profile, Filters, Migration checklist.
+
 ## Choosing the databases
 Pick **Convert from** and **Convert to** at the top of the form (Oracle, PostgreSQL, MySQL, MariaDB, SQL Server, SQLite, Snowflake,
 BigQuery, Redshift, Databricks SQL, Teradata; list in `app/core/dialects.py`).
