@@ -601,7 +601,7 @@ function select(id, scroll) {
   $("#detail").innerHTML = `
     <h2>${esc(x.label)}</h2>
     <div class="meta"><span class="tag ${x.status}">${STATUS_LABEL[x.status] || x.status}</span><span>${esc(x.kind)}</span><span><code>${esc(x.file)}:${x.line}</code></span><span>method: ${esc(x.method)}</span><span>confidence ${Math.round(x.confidence * 100)}%</span><span>about ${x.effort_min} min of human time</span></div>
-    <div class="vline ${esc(v.status)}">${esc(vtxt)}${v.error ? ": " + esc(v.error) : ""}</div>
+    <div class="vline ${esc(v.status)}">${esc(vtxt)}${v.error && !(["ok", "inconclusive"].includes(v.status) && !P().full) ? ": " + esc(v.error) : ""}</div>
     <div class="diff">
       <div class="pane src"><h3>${esc(P().source_label)}${x.constructs.length && P().source === "oracle" ? " (" + x.constructs.length + " Oracle-specific construct" + (x.constructs.length > 1 ? "s" : "") + ")" : ""}</h3><pre>${P().source === "oracle" ? hl(x.oracle_sql) : esc(x.oracle_sql)}</pre></div>
       <div class="pane dst"><h3>${esc(P().target_label)}</h3><pre>${x.pg_sql ? esc(x.pg_sql) : "Not converted. " + (v.error ? esc(v.error) : "")}</pre></div>
