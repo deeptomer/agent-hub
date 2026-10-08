@@ -461,8 +461,8 @@ AGENTS = [
 
 register(FlowDef(
     id="oracle-java-migration",
-    title="Java application converter",
-    tagline="Upload a SQL-heavy Java repo, get converted, checked, risk-ranked SQL",
+    title="Application converter",
+    tagline="Upload a SQL-heavy code repository, get converted, checked, risk-ranked SQL",
     description="Extracts SQL from JDBC strings, MyBatis mappers, JPA native queries and stored procedures, converts it between the two "
                 "databases you pick with a hybrid rules + AI pipeline, checks the result (on a real PostgreSQL sandbox when the target "
                 "is PostgreSQL), and reports what still needs a human.",
