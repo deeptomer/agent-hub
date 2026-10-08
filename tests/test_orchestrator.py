@@ -155,7 +155,7 @@ def test_api_credentials_and_model_validation(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("ACCESS_CODE", "s3cret")
     captured = {}
-    monkeypatch.setattr(registry, "start", lambda flow, run, inputs, use_llm=True, llm_key=None, llm_model=None:
+    monkeypatch.setattr(registry, "start", lambda flow, run, inputs, use_llm=True, llm_key=None, llm_model=None, llm_provider=None:
                         captured.update(use_llm=use_llm, llm_key=llm_key, llm_model=llm_model, inputs=inputs))
     from app.main import app
     c = TestClient(app)
@@ -228,7 +228,7 @@ def test_no_ai_switch_forces_rules_only_even_with_server_key(monkeypatch, tmp_pa
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-serverkey")
     monkeypatch.delenv("ACCESS_CODE", raising=False)
     captured = {}
-    monkeypatch.setattr(registry, "start", lambda flow, run, inputs, use_llm=True, llm_key=None, llm_model=None:
+    monkeypatch.setattr(registry, "start", lambda flow, run, inputs, use_llm=True, llm_key=None, llm_model=None, llm_provider=None:
                         captured.update(use_llm=use_llm, llm_key=llm_key))
     from app.main import app
     r = TestClient(app).post("/api/runs", data={"flow_id": "sql-snippet-converter", "sql": "SELECT 1 FROM DUAL",

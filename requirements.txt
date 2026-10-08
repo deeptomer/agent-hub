@@ -6,3 +6,4 @@ psycopg[binary]>=3.2
 anthropic>=0.40
 langgraph>=0.2
 defusedxml>=0.7
+github-copilot-sdk>=1.0.16   # GitHub Copilot as an LLM backend; needs Python 3.11+

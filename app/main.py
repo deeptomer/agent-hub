@@ -15,12 +15,36 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.core import registry
 from app.core.events import store
-from app.core.llm import check_connection
+from app.core.llm import PROVIDERS, check_connection, check_copilot, copilot_token_problem
 from app.flows.oracle_pg import flow as _flows  # noqa: F401  (registers the flows)
 from app.flows.oracle_pg.report import to_html, to_markdown
 from app.flows.oracle_pg.sandbox import cleanup_stale_schemas
 
 _TOKEN_OK = re.compile(r"^[A-Za-z0-9_\-.=+/]{8,300}$")
+_MODEL_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,59}$")  # Copilot model ids vary by plan, so shape-check only
+
+
+def _check_model_and_key(provider: str, key: str, model: str) -> None:
+    if key and not _TOKEN_OK.match(key):
+        raise HTTPException(400, "That does not look like an API key (no spaces, up to 300 characters)")
+    if provider == "copilot":
+        if key and (problem := copilot_token_problem(key)):
+            raise HTTPException(400, problem)
+        if model and not _MODEL_OK.match(model):
+            raise HTTPException(400, "Unknown model choice")
+    elif model and model not in settings.model_choices:
+        raise HTTPException(400, "Unknown model choice")
+
+
+def _provider(value: str) -> str:
+    value = (value or "").strip().lower() or settings.llm_provider
+    if value not in PROVIDERS:
+        raise HTTPException(400, "Unknown AI provider")
+    return value
+
+
+def _server_key(provider: str) -> str | None:
+    return settings.copilot_token if provider == "copilot" else settings.anthropic_api_key
 _checks: dict[str, list[float]] = {}
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Agent Hub: Oracle to PostgreSQL", version="1.0")
@@ -48,6 +72,9 @@ def healthz() -> dict:
 def config() -> dict:
     return {
         "llm_configured": bool(settings.anthropic_api_key),
+        "default_provider": settings.llm_provider,
+        "server_keys": {"anthropic": bool(settings.anthropic_api_key), "copilot": bool(settings.copilot_token)},
+        "copilot_model": settings.copilot_model,
         "database_configured": bool(settings.database_url),
         "access_code_required": bool(settings.access_code),
         "models": {"orchestrator": settings.model_orchestrator, "converter": settings.model_converter,
@@ -91,6 +118,7 @@ async def create_run(
     access_code: str = Form(""),
     llm_key: str = Form(""),
     llm_model: str = Form(""),
+    llm_provider: str = Form(""),
     github_token: str = Form(""),
     no_ai: str = Form(""),
     file: UploadFile | None = File(None),
@@ -120,12 +148,10 @@ async def create_run(
     llm_key, github_token, llm_model = llm_key.strip(), github_token.strip(), llm_model.strip()
     if no_ai:
         llm_key = ""
-    if llm_key and not _TOKEN_OK.match(llm_key):
-        raise HTTPException(400, "That does not look like an API key (no spaces, up to 300 characters)")
+    provider = _provider(llm_provider)
+    _check_model_and_key(provider, llm_key, llm_model)
     if github_token and not _TOKEN_OK.match(github_token):
         raise HTTPException(400, "That does not look like a GitHub token")
-    if llm_model and llm_model not in settings.model_choices:
-        raise HTTPException(400, "Unknown model choice")
     if github_token:
         inputs["github_token"] = github_token
 
@@ -135,31 +161,36 @@ async def create_run(
     if use_llm and settings.access_code and not llm_key:
         use_llm = hmac.compare_digest(access_code.encode(), settings.access_code.encode())
 
-    ai_on = bool(llm_key or (use_llm and settings.anthropic_api_key))
-    source_label = "your own key" if llm_key else "the server key"
+    ai_on = bool(llm_key or (use_llm and _server_key(provider)))
+    source_label = ("your own " + ("GitHub token" if provider == "copilot" else "key")) if llm_key else "the server key"
+    default_model = settings.copilot_model if provider == "copilot" else "per-agent defaults"
     run = store.create(flow_id, ip)
-    run.emit("Platform", f"AI assist: on ({source_label}; model {llm_model or 'per-agent defaults'})" if ai_on
+    run.emit("Platform", f"AI assist: on ({'GitHub Copilot' if provider == 'copilot' else 'Claude'}; {source_label}; model {llm_model or default_model})" if ai_on
              else "AI assist: off (rules-only run)", "info")
-    registry.start(flow, run, inputs, use_llm=use_llm, llm_key=llm_key or None, llm_model=llm_model or None)
-    return JSONResponse({"run_id": run.id, "ai_assist": ai_on, "ai_source": ("user" if llm_key else "server") if ai_on else None})
+    registry.start(flow, run, inputs, use_llm=use_llm, llm_key=llm_key or None, llm_model=llm_model or None, llm_provider=provider)
+    return JSONResponse({"run_id": run.id, "ai_assist": ai_on, "ai_source": ("user" if llm_key else "server") if ai_on else None,
+                         "ai_provider": provider if ai_on else None})
 
 
 @app.post("/api/llm/check")
-async def llm_check(request: Request, llm_key: str = Form(""), llm_model: str = Form("")) -> dict:
-    """'Test connection' button. The key is used for one 1-token call and discarded."""
+async def llm_check(request: Request, llm_key: str = Form(""), llm_model: str = Form(""), llm_provider: str = Form("")) -> dict:
+    """'Test connection' button. The key is used for one cheap check and discarded."""
     ip = _client_ip(request)
     now = time.time()
     hits = [t for t in _checks.get(ip, []) if now - t < 3600]
     if len(hits) >= 20:
         raise HTTPException(429, "Too many connection checks this hour")
     _checks[ip] = hits + [now]
-    key = llm_key.strip()
-    if key and not _TOKEN_OK.match(key):
-        raise HTTPException(400, "That does not look like an API key")
-    model = llm_model.strip() or settings.model_converter
-    if model not in settings.model_choices:
-        raise HTTPException(400, "Unknown model choice")
-    key = key or (settings.anthropic_api_key or "")
+    provider = _provider(llm_provider)
+    key, model = llm_key.strip(), llm_model.strip()
+    _check_model_and_key(provider, key, model)
+    key = key or (_server_key(provider) or "")
+    if provider == "copilot":
+        if not key:
+            return {"ok": False, "message": "No token: paste your own GitHub token or ask the owner to set COPILOT_GITHUB_TOKEN on the server"}
+        ok, msg, models = await asyncio.to_thread(check_copilot, key, model or settings.copilot_model)
+        return {"ok": ok, "message": msg, "model": model or settings.copilot_model, "models": models[:60]}
+    model = model or settings.model_converter
     if not key:
         return {"ok": False, "message": "No key: paste your own key or ask the owner to set ANTHROPIC_API_KEY on the server"}
     ok, msg = await asyncio.to_thread(check_connection, key, model)

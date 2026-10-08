@@ -35,18 +35,32 @@ review depth, repair budget, what the Risk Reviewer should focus on) and (2) tri
 Critic agent only gets those worth another try. Plans are clamped in code (`orchestrator.py`): the model cannot disable
 validation or exceed the repair cap. Without Claude, a deterministic default plan runs. The report shows the plan and a trace.
 
-## Credentials and models
-* **Server key** – `ANTHROPIC_API_KEY` on Render (optionally gated by `ACCESS_CODE`).
-* **Your own key** – paste an Anthropic API key in the "AI connection" panel. It is sent with the run over HTTPS, held in
-  memory only for that run, never stored, logged or put in a report; errors are redacted. No access code is needed because you pay.
+## AI backends: Claude or GitHub Copilot
+Every agent calls one function (`LLM.call_tool` in `app/core/llm.py`), so the backend is switchable per run in the
+"AI connection" panel, or by default with `LLM_PROVIDER` (`anthropic` or `copilot`).
+
+* **Claude (Anthropic API)** – `ANTHROPIC_API_KEY` on the server, or paste your own key in the panel. Pick one model for all
+  agents or keep the per-agent defaults (`MODEL_ORCHESTRATOR`, `MODEL_CONVERTER`, `MODEL_REVIEWER`, `MODEL_CRITIC`; choices: `MODEL_CHOICES`).
+* **GitHub Copilot (Copilot SDK, `github-copilot-sdk`)** – the SDK starts a small native Copilot runtime (one binary, no Node.js;
+  the Dockerfile downloads it at build time) and the agents use it as a language model. Structured output works the same
+  way as for Claude: the model must answer through one declared tool whose JSON schema is the agent's schema.
+  All Copilot built-in tools (shell, files, web) are switched off, every permission request is rejected, the runtime gets a
+  scrubbed environment (no server secrets) and an empty working directory.
+  * Token: a **fine-grained personal access token** (`github_pat_...`) from your personal account with the **Copilot Requests**
+    permission, on an account with an active Copilot plan (free tier works with limits). OAuth/App user tokens (`gho_`/`ghu_`) also work.
+    **Classic `ghp_` tokens are not supported** and are rejected up front.
+  * Server-side: `COPILOT_GITHUB_TOKEN`; model: `COPILOT_MODEL` (default `auto`). In the panel the model box is free text; "Test connection"
+    fills it with the models your account can use. `COPILOT_TIMEOUT` (seconds, default 120) limits each call.
+  * Copilot returns no token counts, so reports show estimates (about 4 characters per token) and say so. Usage counts against your Copilot quota.
+* **Your own credential** – sent with the run over HTTPS, held in memory only for that run, never stored, logged or put in a
+  report; errors are redacted. No access code is needed because you pay. A bad or unentitled token switches AI off for that run
+  (the rules engine and sandbox validation still run).
 * **No AI** – rules-only run.
-* **Model** – pick one model for all agents, or leave the per-agent defaults (`MODEL_ORCHESTRATOR`, `MODEL_CONVERTER`,
-  `MODEL_REVIEWER`, `MODEL_CRITIC`). Allowed choices: `MODEL_CHOICES`.
-* **GitHub token** – optional, for private repositories only (fine-grained, read-only Contents). Sent to api.github.com only.
-  GitHub tokens cannot be used for AI: GitHub Models was retired in July 2026.
+* **GitHub token for private repos** – separate and optional (fine-grained, read-only Contents), sent to api.github.com only.
+  GitHub Models cannot be used: it was retired in July 2026.
 
 ## Configuration
-`ANTHROPIC_API_KEY`, `MODEL_ORCHESTRATOR`, `MODEL_CONVERTER`, `MODEL_REVIEWER`, `MODEL_CRITIC`, `MODEL_CHOICES`, `DATABASE_URL`, `ACCESS_CODE`, `MAX_UPLOAD_MB`, `MAX_FILES`,
+`LLM_PROVIDER`, `COPILOT_GITHUB_TOKEN`, `COPILOT_MODEL`, `COPILOT_TIMEOUT`, `ANTHROPIC_API_KEY`, `MODEL_ORCHESTRATOR`, `MODEL_CONVERTER`, `MODEL_REVIEWER`, `MODEL_CRITIC`, `MODEL_CHOICES`, `DATABASE_URL`, `ACCESS_CODE`, `MAX_UPLOAD_MB`, `MAX_FILES`,
 `MAX_STATEMENTS`, `LLM_CONCURRENCY`, `MAX_REPAIR_ATTEMPTS`, `MAX_CONCURRENT_RUNS`, `RUNS_PER_HOUR_PER_IP`.
 
 ## Adding another agent flow

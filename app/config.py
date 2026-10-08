@@ -13,6 +13,25 @@ class Settings:
         return os.getenv("ANTHROPIC_API_KEY") or None
 
     @property
+    def llm_provider(self) -> str:
+        """Default LLM backend for runs that do not choose one: 'anthropic' or 'copilot'."""
+        v = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+        return v if v in ("anthropic", "copilot") else "anthropic"
+
+    @property
+    def copilot_token(self) -> str | None:
+        """Server-side GitHub token for GitHub Copilot (fine-grained PAT with Copilot Requests, or gho_/ghu_ token)."""
+        return os.getenv("COPILOT_GITHUB_TOKEN") or None
+
+    @property
+    def copilot_model(self) -> str:
+        return os.getenv("COPILOT_MODEL", "auto")
+
+    @property
+    def copilot_timeout(self) -> float:
+        return float(os.getenv("COPILOT_TIMEOUT", "120"))
+
+    @property
     def model_choices(self) -> list[str]:
         """Models a caller may pick for a run (allow-list; set MODEL_CHOICES to a comma-separated list to change it)."""
         raw = os.getenv("MODEL_CHOICES", "claude-sonnet-5-5,claude-opus-5-5,claude-haiku-4-5-20251001,claude-fable-5-1")

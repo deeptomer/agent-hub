@@ -51,11 +51,11 @@ def register(flow: FlowDef) -> None:
 
 
 def start(flow: FlowDef, run: Run, inputs: dict[str, Any], use_llm: bool = True, llm_key: str | None = None,
-          llm_model: str | None = None) -> None:
+          llm_model: str | None = None, llm_provider: str | None = None) -> None:
     """Run a flow on a background thread; never raises into the caller."""
     wd = settings.data_dir / "runs" / run.id
     wd.mkdir(parents=True, exist_ok=True)
-    ctx = RunContext(run=run, inputs=inputs, llm=LLM(enabled=use_llm, api_key=llm_key, model_override=llm_model), workdir=wd)
+    ctx = RunContext(run=run, inputs=inputs, llm=LLM(enabled=use_llm, api_key=llm_key, model_override=llm_model, provider=llm_provider), workdir=wd)
 
     def job() -> None:
         run.status = "running"
@@ -71,5 +71,8 @@ def start(flow: FlowDef, run: Run, inputs: dict[str, Any], use_llm: bool = True,
             run.emit("Platform", f"Run failed: {run.error}", "error")
         finally:
             run.finished = time.time()
+            closer = getattr(ctx.llm, "close", None)
+            if callable(closer):
+                closer()  # stops the Copilot runtime process, if one was started
 
     _executor.submit(job)

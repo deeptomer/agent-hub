@@ -160,20 +160,25 @@ details.box summary{cursor:pointer;font-weight:500}
       <div id="inputs"></div>
       <details class="box" id="ai-box" open>
         <summary id="ai-summary">AI connection</summary>
-        <div class="field" style="margin-top:10px"><span class="lab">Who provides the Claude access for this run?</span>
+        <div class="field" style="margin-top:10px"><span class="lab">Which AI service calls the model?</span>
+          <div class="seg" id="ai-provider">
+            <label><input type="radio" name="ai_provider" value="anthropic"><span>Claude (Anthropic API)</span></label>
+            <label><input type="radio" name="ai_provider" value="copilot"><span>GitHub Copilot</span></label>
+          </div></div>
+        <div class="field" style="margin-top:10px"><span class="lab" id="ai-mode-lab">Who provides the access for this run?</span>
           <div class="seg" id="ai-mode">
             <label><input type="radio" name="ai_mode" value="server"><span>Server key</span></label>
-            <label><input type="radio" name="ai_mode" value="own"><span>My own Anthropic API key</span></label>
+            <label><input type="radio" name="ai_mode" value="own"><span id="own-label">My own key</span></label>
             <label><input type="radio" name="ai_mode" value="none"><span>No AI (rules only)</span></label>
           </div></div>
-        <div class="field hidden" id="own-key-field" style="margin-top:10px"><label for="llm_key">Your Anthropic API key</label>
+        <div class="field hidden" id="own-key-field" style="margin-top:10px"><label for="llm_key" id="key-label">Your Anthropic API key</label>
           <input type="password" id="llm_key" autocomplete="off" spellcheck="false" placeholder="sk-ant-...">
-          <div class="hint">Sent over HTTPS with the run and kept in memory only while it runs. Never stored, logged or added to a report. A GitHub token cannot be used here: GitHub Models was retired in July 2026.</div></div>
+          <div class="hint" id="key-hint">Sent over HTTPS with the run and kept in memory only while it runs. Never stored, logged or added to a report.</div></div>
         <div class="field hidden" id="code-field" style="margin-top:10px"><label for="access_code">Access code for the server key</label>
           <input type="password" id="access_code" autocomplete="off">
           <div class="hint">Without the code the server key is not used and the run is rules-only.</div></div>
         <div class="field" style="margin-top:10px"><label for="llm_model">Model for all agents</label>
-          <div class="row" style="margin:0"><select id="llm_model"></select><button type="button" class="btn ghost" id="ai-test">Test connection</button><span class="hint" id="ai-test-msg" aria-live="polite"></span></div></div>
+          <div class="row" style="margin:0"><select id="llm_model"></select><input type="text" id="copilot_model" list="copilot-models" class="hidden" autocomplete="off" spellcheck="false" placeholder="auto"><datalist id="copilot-models"></datalist><button type="button" class="btn ghost" id="ai-test">Test connection</button><span class="hint" id="ai-test-msg" aria-live="polite"></span></div></div>
       </details>
       <div class="row"><button class="btn" id="run" type="submit">Run analysis</button><span class="hint" id="run-hint"></span></div>
       <div class="err hidden" id="error" role="alert"></div>
@@ -213,30 +218,48 @@ async function boot() {
   selectFlow(FLOWS[0].id);
 }
 function renderStatus() {
-  const llm = CONFIG.llm_configured, db = CONFIG.database_configured;
+  const sk = CONFIG.server_keys || { anthropic: CONFIG.llm_configured, copilot: false }, llm = sk.anthropic || sk.copilot, db = CONFIG.database_configured;
+  const which = [sk.anthropic ? "Claude" : "", sk.copilot ? "GitHub Copilot" : ""].filter(Boolean).join(" + ");
   $("#status").innerHTML =
-    `<div><span class="dot ${llm ? "on" : "off"}"></span><span>${llm ? "Server key set, default model " + esc(CONFIG.models.converter) : "No server key: use your own key or run rules-only"}</span></div>` +
+    `<div><span class="dot ${llm ? "on" : "off"}"></span><span>${llm ? "Server credential set: " + esc(which) : "No server credential: use your own key/token or run rules-only"}</span></div>` +
     `<div><span class="dot ${db ? "on" : "off"}"></span><span>${db ? "PostgreSQL sandbox connected" : "No sandbox database: syntax-only checks"}</span></div>`;
 }
+function provider() { const r = document.querySelector("#ai-provider input:checked"); return r ? r.value : "anthropic"; }
+function modelValue() { return provider() === "copilot" ? $("#copilot_model").value.trim() : $("#llm_model").value; }
 function initAI() {
-  const server = CONFIG.llm_configured;
+  const keys = CONFIG.server_keys || { anthropic: CONFIG.llm_configured, copilot: false };
   $("#llm_model").innerHTML = `<option value="">Per-agent defaults (${esc(CONFIG.models.converter)})</option>` + CONFIG.model_choices.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
-  const mode = server ? "server" : "none";
-  document.querySelectorAll("#ai-mode input").forEach(r => { r.checked = r.value === mode; if (r.value === "server" && !server) r.disabled = true; });
-  const upd = () => {
+  $("#copilot_model").placeholder = CONFIG.copilot_model || "auto";
+  const first = CONFIG.default_provider || "anthropic";
+  document.querySelectorAll("#ai-provider input").forEach(r => { r.checked = r.value === first; });
+  const upd = (resetMode) => {
+    const p = provider(), server = !!keys[p], cop = p === "copilot";
+    document.querySelectorAll("#ai-mode input").forEach(r => {
+      if (r.value === "server") r.disabled = !server;
+      if (resetMode) r.checked = r.value === (server ? "server" : "none");
+    });
+    if (document.querySelector("#ai-mode input:checked")?.disabled) document.querySelector("#ai-mode input[value=none]").checked = true;
     const m = aiMode();
+    $("#own-label").textContent = cop ? "My own GitHub token" : "My own Anthropic API key";
+    $("#key-label").textContent = cop ? "Your GitHub token (Copilot)" : "Your Anthropic API key";
+    $("#llm_key").placeholder = cop ? "github_pat_..." : "sk-ant-...";
+    $("#key-hint").textContent = cop
+      ? "Use a fine-grained token (github_pat_...) from your personal account with the 'Copilot Requests' permission, and an active Copilot plan. Classic ghp_ tokens do not work. Sent over HTTPS, kept in memory only while the run lasts, never stored, logged or added to a report."
+      : "Sent over HTTPS with the run and kept in memory only while it runs. Never stored, logged or added to a report.";
+    $("#llm_model").classList.toggle("hidden", cop); $("#copilot_model").classList.toggle("hidden", !cop);
     $("#own-key-field").classList.toggle("hidden", m !== "own");
     $("#code-field").classList.toggle("hidden", !(m === "server" && CONFIG.access_code_required));
-    $("#llm_model").disabled = m === "none"; $("#ai-test").disabled = m === "none";
-    $("#ai-summary").textContent = "AI connection: " + ({ server: "server key", own: "your own key", none: "off, rules only" }[m]);
+    $("#llm_model").disabled = m === "none"; $("#copilot_model").disabled = m === "none"; $("#ai-test").disabled = m === "none";
+    $("#ai-summary").textContent = "AI connection: " + (cop ? "GitHub Copilot, " : "Claude, ") + ({ server: "server credential", own: "your own credential", none: "off, rules only" }[m]);
   };
-  $("#ai-mode").onchange = upd; upd();
+  $("#ai-provider").onchange = () => upd(true); $("#ai-mode").onchange = () => upd(false); upd(true);
   $("#ai-test").onclick = async () => {
-    const fd = new FormData(); fd.append("llm_model", $("#llm_model").value);
+    const fd = new FormData(); fd.append("llm_model", modelValue()); fd.append("llm_provider", provider());
     if (aiMode() === "own") fd.append("llm_key", $("#llm_key").value);
     $("#ai-test-msg").textContent = "Checking...";
     try {
       const r = await fetch("/api/llm/check", { method: "POST", body: fd }); const j = await r.json();
+      if (j.models && j.models.length) $("#copilot-models").innerHTML = j.models.map(m => `<option value="${esc(m)}">`).join("");
       $("#ai-test-msg").textContent = r.ok ? (j.ok ? "OK: " : "Problem: ") + j.message : (j.detail || "Check failed");
     } catch { $("#ai-test-msg").textContent = "Could not reach the server"; }
   };
@@ -303,7 +326,7 @@ $("#composer").addEventListener("submit", async e => {
   });
   const mode = aiMode();
   if (mode === "none") fd.append("no_ai", "1");
-  else { fd.append("llm_model", $("#llm_model").value); if (mode === "own") fd.append("llm_key", $("#llm_key").value); else fd.append("access_code", $("#access_code").value); }
+  else { fd.append("llm_model", modelValue()); fd.append("llm_provider", provider()); if (mode === "own") fd.append("llm_key", $("#llm_key").value); else fd.append("access_code", $("#access_code").value); }
   $("#error").classList.add("hidden"); $("#run").disabled = true;
   try {
     const r = await fetch("/api/runs", { method: "POST", body: fd });
@@ -361,7 +384,7 @@ function renderReport() {
   const orch = m.orchestration;
   const orchBox = orch ? `<details class="box" open><summary>Orchestration: who decided what</summary>
       <p><b>${orch.plan.source === "orchestrator" ? "Plan written by the Orchestrator agent (Claude)" : "Default plan (no AI planning in this run)"}</b>: ${esc(orch.plan.rationale)}</p>
-      <p class="hint">Code Reader ${orch.plan.run_code_reader ? "on" : "off"} | review depth: ${esc(orch.plan.review_depth)} | Critic ${orch.plan.run_critic ? "on" : "off"} | up to ${orch.plan.max_repairs} repair(s) | model: ${esc(orch.ai.model)} | key: ${esc(orch.ai.key_source || "none")}</p>
+      <p class="hint">Code Reader ${orch.plan.run_code_reader ? "on" : "off"} | review depth: ${esc(orch.plan.review_depth)} | Critic ${orch.plan.run_critic ? "on" : "off"} | up to ${orch.plan.max_repairs} repair(s) | model: ${esc(orch.ai.model)} | AI: ${esc(orch.ai.provider === "copilot" ? "GitHub Copilot" : "Claude")} | credential: ${esc(orch.ai.key_source || "none")}</p>
       ${orch.plan.focus.length ? `<p class="hint">Risk Reviewer focus: ${orch.plan.focus.map(esc).join("; ")}</p>` : ""}
       <div class="trace">${orch.trace.map(t => `<b>${esc(t.agent)}</b><span>${esc(t.decision)}${t.reason ? ` <span class="why">- ${esc(t.reason)}</span>` : ""}</span>`).join("")}</div>
     </details>` : "";
