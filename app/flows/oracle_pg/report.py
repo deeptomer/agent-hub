@@ -6,6 +6,7 @@ import time
 from collections import Counter
 from typing import Any
 
+from app.core import dialects
 from app.core.security import Finding
 from app.flows.oracle_pg.models import PLSQL_BASELINE_MIN, TIER_BASELINE_MIN, Stmt
 
@@ -27,9 +28,22 @@ CHECKLIST_BASE = [
 ]
 
 
+def _generic_checklist(sl: str, tl: str) -> list[str]:
+    return [
+        f"Provision {tl} (a version that supports every feature used) and apply the converted schema first.",
+        f"Swap the JDBC driver, URL and ORM dialect to {tl}; remove {sl}-specific imports, hints and error-code handling.",
+        f"Migrate the data with a tool built for {sl} to {tl}, then check sequences / identity columns and character sets.",
+        f"These statements were only syntax-checked in the {tl} dialect. Run each against a real {tl} database with representative data.",
+        f"Run the same inputs against {sl} and {tl} and compare results (NULL vs empty string, ordering, dates, rounding).",
+        "Re-tune performance: statistics, indexes and any dropped optimizer hints.",
+    ]
+
+
 def build_report(*, run_id: str, source_name: str, stmts: list[Stmt], findings: list[Finding], stats: dict[str, Any],
-                 sandbox: Any, llm: Any, started: float, executive_summary: str | None = None) -> dict[str, Any]:
+                 sandbox: Any, llm: Any, started: float, executive_summary: str | None = None,
+                 pair: tuple[str, str] = dialects.FULL_PAIR) -> dict[str, Any]:
     n = len(stmts)
+    pair_info = dialects.describe_pair(*pair)
     by_status = Counter(s.status for s in stmts)
     by_method = Counter(s.method for s in stmts)
     by_val = Counter(s.validation.get("status", "pending") for s in stmts)
@@ -54,9 +68,9 @@ def build_report(*, run_id: str, source_name: str, stmts: list[Stmt], findings: 
         },
         "auto_rate_pct": round(100 * (by_status.get("auto", 0) + by_status.get("portable", 0)) / n) if n else 0,
     }
-    checklist = list(CHECKLIST_BASE)
+    checklist = list(CHECKLIST_BASE) if pair_info["full"] else _generic_checklist(pair_info["source_label"], pair_info["target_label"])
     for f in findings:
-        if f.category.startswith("App change needed"):
+        if f.category.startswith("App change needed") and pair_info["full"]:
             line = f"{f.category.replace('App change needed: ', '')} ({f.file}:{f.line}): {f.detail}"
             if line not in checklist:
                 checklist.append(line)
@@ -73,7 +87,7 @@ def build_report(*, run_id: str, source_name: str, stmts: list[Stmt], findings: 
             f"{risk_counts.get('high', 0)} high-severity semantic risks were flagged. Estimated effort: "
             f"{summary['effort']['assisted_hours']} h with the tool vs {summary['effort']['baseline_hours']} h manually.")
     return {
-        "meta": {"run_id": run_id, "source": source_name, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "meta": {"run_id": run_id, "source": source_name, "pair": pair_info, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
                  "duration_s": round(time.time() - started, 1),
                  "sandbox": {"mode": sandbox.mode, "version": sandbox.version, "error": sandbox.error},
                  "llm": {"available": llm.available, "usage": llm.usage_summary(), "last_error": llm.last_error},
@@ -89,7 +103,8 @@ def build_report(*, run_id: str, source_name: str, stmts: list[Stmt], findings: 
 # ------------------------------------------------------------------------------------------- renderers
 def to_markdown(rep: dict[str, Any]) -> str:
     m, s = rep["meta"], rep["summary"]
-    out = [f"# Oracle to PostgreSQL migration assessment", "", f"Source: **{m['source']}**  |  Run {m['run_id']}  |  {m['generated_at']}", "",
+    pi = m.get("pair") or dialects.describe_pair(*dialects.FULL_PAIR)
+    out = [f"# {pi['source_label']} to {pi['target_label']} conversion assessment", "", f"Source: **{m['source']}**  |  Run {m['run_id']}  |  {m['generated_at']}", "",
            "## Executive summary", "", rep["executive_summary"], "",
            "## Numbers", "",
            f"- Statements analysed: **{s['statements']}**",
@@ -108,7 +123,7 @@ def to_markdown(rep: dict[str, Any]) -> str:
     for st in rep["statements"]:
         out += [f"### {st['id']} {st['label']}  ({st['kind']}, {st['status']}, confidence {st['confidence']})", "",
                 f"`{st['file']}:{st['line']}`  |  method: {st['method']}  |  validation: {st['validation']['status']}", ""]
-        out += ["Oracle:", "```sql", st["oracle_sql"], "```", "PostgreSQL:", "```sql", st["pg_sql"] or "-- not converted", "```"]
+        out += [f"{pi['source_label']}:", "```sql", st["oracle_sql"], "```", f"{pi['target_label']}:", "```sql", st["pg_sql"] or "-- not converted", "```"]
         if st["validation"].get("error"):
             out.append(f"Validator: {st['validation']['error']}")
         for r in st["risks"]:
@@ -120,26 +135,28 @@ def to_markdown(rep: dict[str, Any]) -> str:
 def to_html(rep: dict[str, Any]) -> str:
     e = html.escape
     m, s = rep["meta"], rep["summary"]
+    pi = m.get("pair") or dialects.describe_pair(*dialects.FULL_PAIR)
+    sl, tl = e(pi["source_label"]), e(pi["target_label"])
     rows = []
     for st in rep["statements"]:
         risks = "".join(f"<li><b>{e(r['severity'])}</b> {e(r['category'])}: {e(r['message'])}</li>" for r in st["risks"])
         rows.append(
             f"<details><summary><b>{e(st['id'])}</b> {e(st['label'])} <span class='tag {e(st['status'])}'>{e(st['status'])}</span> "
             f"<span class='muted'>{e(st['kind'])} | confidence {st['confidence']}</span></summary>"
-            f"<div class='cols'><div><h4>Oracle</h4><pre>{e(st['oracle_sql'])}</pre></div>"
-            f"<div><h4>PostgreSQL</h4><pre>{e(st['pg_sql'] or '-- not converted')}</pre></div></div>"
+            f"<div class='cols'><div><h4>{sl}</h4><pre>{e(st['oracle_sql'])}</pre></div>"
+            f"<div><h4>{tl}</h4><pre>{e(st['pg_sql'] or '-- not converted')}</pre></div></div>"
             f"<p class='muted'>{e(st['file'])}:{st['line']} | {e(st['method'])} | validation {e(st['validation']['status'])} "
             f"{e(st['validation'].get('error') or '')}</p><ul>{risks}</ul></details>")
     fnd = "".join(f"<li><b>{e(f['severity'])}</b> {e(f['category'])} <code>{e(f['file'])}:{f['line']}</code> {e(f['detail'])}</li>"
                   for f in rep["findings"])
     chk = "".join(f"<li>{e(c)}</li>" for c in rep["checklist"])
-    return f"""<!doctype html><html><head><meta charset="utf-8"><title>Migration assessment</title><style>
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>{sl} to {tl} conversion assessment</title><style>
 body{{font:15px/1.5 system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#1b1f24}}
 pre{{background:#f4f6f8;padding:.7rem;overflow:auto;border-radius:6px;font-size:12.5px;white-space:pre-wrap}}
 .cols{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}details{{border:1px solid #d8dee4;border-radius:8px;margin:.5rem 0;padding:.5rem .8rem}}
 .tag{{padding:1px 8px;border-radius:10px;font-size:12px;background:#e8eef4}}.auto,.portable{{background:#d9f2e3}}.review{{background:#fff1cc}}.manual{{background:#fddcdc}}
 .muted{{color:#667}}h1,h2{{margin-top:1.6rem}}</style></head><body>
-<h1>Oracle to PostgreSQL migration assessment</h1><p class="muted">{e(m['source'])} | run {e(m['run_id'])} | {e(m['generated_at'])}</p>
+<h1>{sl} to {tl} conversion assessment</h1><p class="muted">{e(m['source'])} | run {e(m['run_id'])} | {e(m['generated_at'])}</p>
 <h2>Executive summary</h2><p>{e(rep['executive_summary'])}</p>
 <p><b>{s['statements']}</b> statements | auto/portable <b>{s['auto_rate_pct']}%</b> | avg confidence <b>{s['avg_confidence']}</b> |
 effort <b>{s['effort']['assisted_hours']} h</b> vs <b>{s['effort']['baseline_hours']} h</b> manual</p>

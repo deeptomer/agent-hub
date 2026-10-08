@@ -11,6 +11,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 
 from app.config import settings
+from app.core import dialects
 from app.core.registry import FlowDef, RunContext, register
 from app.core.security import Finding, UnsafeInput, fetch_github_zip, safe_extract_zip
 from app.flows.oracle_pg import extract, reader
@@ -22,6 +23,7 @@ from app.flows.oracle_pg.report import build_report
 from app.flows.oracle_pg.risk import assess, finalize, merge_risks
 from app.flows.oracle_pg.rules import SchemaInfo, schema_from_ddl
 from app.flows.oracle_pg.sandbox import Sandbox
+from app.flows.oracle_pg.generic import GenericPipeline, review_generic
 from app.flows.oracle_pg.stmt_graph import StmtPipeline
 
 
@@ -71,6 +73,10 @@ def _parallel(fn, items: list, workers: int) -> None:
         list(pool.map(fn, items))
 
 
+def _pair(ctx: RunContext) -> tuple[str, str]:
+    return str(ctx.inputs.get("source_db") or dialects.DEFAULT_SOURCE), str(ctx.inputs.get("target_db") or dialects.DEFAULT_TARGET)
+
+
 # ------------------------------------------------------------------------------------------- shared steps
 def _setup_sandbox(ctx: RunContext) -> Sandbox:
     sb = Sandbox(settings.database_url, ctx.run.id)
@@ -85,21 +91,24 @@ def _setup_sandbox(ctx: RunContext) -> Sandbox:
 def _review(ctx: RunContext, stmts: list[Stmt], schema: SchemaInfo, depth: str = "non_trivial",
             focus: list[str] | None = None) -> None:
     done = [0]
+    src, tgt = _pair(ctx)
+    full = dialects.is_full(src, tgt)
 
     def one(s: Stmt) -> None:
-        rule_risks = assess(s)
+        rule_risks = assess(s) if full else []
         llm_risks = []
         non_trivial = s.tier != "trivial" or s.method != "rules" or s.kind in ("plsql", "jdbc_call")
         wants_llm = s.status != "portable" and depth != "rules_only" and (non_trivial or depth == "all")
         if ctx.llm.available and wants_llm and s.pg_sql:
-            llm_risks = review_with_llm(ctx.llm, s, schema, focus)
+            llm_risks = review_with_llm(ctx.llm, s, schema, focus) if full else review_generic(ctx.llm, s, src, tgt, focus)
         s.risks = merge_risks(rule_risks, llm_risks)
         finalize(s)
         done[0] += 1
 
     ctx.emit("Risk Reviewer", f"Reviewing {len(stmts)} statements for semantic differences"
              + ({"all": " (rules + Claude on every non-portable statement)", "non_trivial": " (rules + Claude on the non-trivial ones)",
-                 "rules_only": " (rules only, as planned by the Orchestrator)"}[depth] if ctx.llm.available else " (rules only; no LLM configured)"),
+                 "rules_only": " (rules only, as planned by the Orchestrator)"}[depth] if ctx.llm.available else
+             (" (rules only; no AI configured)" if full else " (no AI configured, so no semantic review for this database pair)")),
              "stage")
     _parallel(one, stmts, settings.llm_concurrency)
     high = sum(1 for s in stmts for r in s.risks if r.severity == "high")
@@ -129,13 +138,27 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
     sandbox: Sandbox | None = None
     trace: list[dict[str, Any]] = []
 
+    # Overall progress (percent) once each step has finished; the queries step fills 42..80 by itself.
+    milestones = {"plan": 12, "code_reader": 22, "schema": 35, "plsql": 42, "queries": 80, "triage": 83, "critic": 88,
+                  "review": 96, "report": 100}
+    pct = [0]
+
+    def progress(value: float) -> None:
+        pct[0] = max(pct[0], min(100, round(value)))
+        ctx.emit("Platform", "progress", "info", progress=[pct[0], 100])
+
     def note(step: str, agent: str, decision: str, reason: str = "") -> None:
         trace.append({"step": step, "agent": agent, "decision": decision, "reason": reason, "t": round(time.time() - started, 1)})
+        if step in milestones:
+            progress(milestones[step])
 
     try:
         def intake(state: FlowState) -> FlowState:
             src = ctx.inputs.get("source", "sample")
             ctx.emit("Intake", f"Source: {src}", "stage")
+            progress(3)
+            if src in ("sample", "sample2") and _pair(ctx)[0] != "oracle":
+                raise RuntimeError("The bundled sample projects use Oracle. Upload your own project or choose Oracle as the source database.")
             if src == "sample":
                 root, name = settings.sample_app_dir, "Acme Orders (synthetic Oracle demo app)"
                 ctx.emit("Intake", "Using the bundled synthetic Oracle sample application", "info")
@@ -211,12 +234,19 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
 
         def schema_node(state: FlowState) -> FlowState:
             nonlocal sandbox
-            sandbox = _setup_sandbox(ctx)
+            src, tgt = _pair(ctx)
             stmts = state["stmts"]
             ddl = [s for s in stmts if s.kind == "ddl"]
-            schema = schema_from_ddl([s.oracle_sql for s in ddl])
-            pipe = StmtPipeline(llm=ctx.llm, sandbox=sandbox, schema=schema,
-                                emit=lambda a, m, l="info", **d: ctx.emit(a, m, l, **d), max_repairs=state["plan"].max_repairs)
+            emit = lambda a, m, l="info", **d: ctx.emit(a, m, l, **d)  # noqa: E731
+            if dialects.is_full(src, tgt):
+                sandbox = _setup_sandbox(ctx)
+                schema = schema_from_ddl([s.oracle_sql for s in ddl])
+                pipe = StmtPipeline(llm=ctx.llm, sandbox=sandbox, schema=schema, emit=emit, max_repairs=state["plan"].max_repairs)
+            else:
+                sandbox, schema = Sandbox(None, ctx.run.id), SchemaInfo()
+                ctx.emit("Validator", f"{dialects.label(src)} to {dialects.label(tgt)}: no live {dialects.label(tgt)} database, "
+                                      f"so statements are syntax-checked in the {dialects.label(tgt)} dialect only", "warn")
+                pipe = GenericPipeline(llm=ctx.llm, src=src, tgt=tgt, emit=emit, max_repairs=state["plan"].max_repairs)
             if ddl:
                 ctx.emit("Converter", f"Converting and applying {len(ddl)} schema statements in dependency order", "stage")
                 for s in _order_ddl(ddl):
@@ -231,20 +261,20 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
         def plsql_node(state: FlowState) -> FlowState:
             units = [s for s in state["stmts"] if s.kind == "plsql"]
             if units:
-                ctx.emit("Converter", f"Converting {len(units)} PL/SQL unit(s) to PL/pgSQL", "stage")
+                ctx.emit("Converter", f"Converting {len(units)} procedural unit(s)", "stage")
                 _parallel(state["pipeline"].run, units, settings.llm_concurrency)
             note("plsql", "Converter", f"{len(units)} PL/SQL units")
             return {"done": state["done"] + ["plsql"]}
 
         def queries_node(state: FlowState) -> FlowState:
             qs = [s for s in state["stmts"] if s.kind not in ("ddl", "plsql")]
-            ctx.emit("Converter", f"Converting {len(qs)} queries / DML statements (rules first, Claude for the hard ones)", "stage")
+            ctx.emit("Converter", f"Converting {len(qs)} queries / DML statements (rules first, AI for the hard ones)", "stage")
             counter = [0]
 
             def one(s: Stmt) -> None:
                 state["pipeline"].run(s)
                 counter[0] += 1
-                ctx.emit("Platform", f"{counter[0]}/{len(qs)} statements processed", "info", progress=[counter[0], len(qs)])
+                ctx.emit("Platform", f"{counter[0]}/{len(qs)} statements processed", "info", progress=[round(42 + 38 * counter[0] / max(len(qs), 1)), 100])
 
             # jdbc_call statements depend on PL/SQL results, so they go last
             _parallel(one, [s for s in qs if s.kind != "jdbc_call"], settings.llm_concurrency)
@@ -305,8 +335,11 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
         def report_node(state: FlowState) -> FlowState:
             ctx.emit("Report", "Assembling report, effort estimate and migration checklist", "stage")
             summary_text = _summary_text(ctx, state["stmts"], state["findings"])
-            rep = build_report(run_id=ctx.run.id, source_name=state["source_name"], stmts=state["stmts"], findings=state["findings"],
-                               stats=state["stats"], sandbox=sandbox, llm=ctx.llm, started=started, executive_summary=summary_text)
+            full_pair = dialects.is_full(*_pair(ctx))  # the "App change needed" advice names Oracle and PostgreSQL specifically
+            findings = [f for f in state["findings"] if full_pair or not f.category.startswith("App change needed")]
+            rep = build_report(run_id=ctx.run.id, source_name=state["source_name"], stmts=state["stmts"], findings=findings,
+                               stats=state["stats"], sandbox=sandbox, llm=ctx.llm, started=started, executive_summary=summary_text,
+                               pair=_pair(ctx))
             rep["meta"]["orchestration"] = {"plan": state["plan"].to_dict(), "trace": trace, "ai": ctx.llm.describe()}
             s = rep["summary"]
             ctx.emit("Report", f"{s['auto_rate_pct']}% auto/portable, {s['by_status'].get('review', 0)} to review, "
@@ -356,45 +389,59 @@ def run_migration(ctx: RunContext) -> dict[str, Any]:
 # ------------------------------------------------------------------------------------------- flow 2
 def run_snippet(ctx: RunContext) -> dict[str, Any]:
     started = time.time()
+    src, tgt = _pair(ctx)
+    full = dialects.is_full(src, tgt)
+    sl = dialects.label(src)
     sql = str(ctx.inputs.get("sql", "")).strip()
     if not sql:
-        raise RuntimeError("Paste an Oracle SQL statement or PL/SQL block")
+        raise RuntimeError(f"Paste a {sl} SQL statement" + (" or PL/SQL block" if src == "oracle" else ""))
     if len(sql) > 20_000:
         raise RuntimeError("Snippet is larger than 20,000 characters")
-    ctx.emit("Intake", f"Received {len(sql)} characters", "stage")
-    sandbox = _setup_sandbox(ctx)
+    ctx.emit("Intake", f"Received {len(sql)} characters ({sl} to {dialects.label(tgt)})", "stage")
+    ctx.emit("Platform", "progress", "info", progress=[10, 100])
+    sandbox = _setup_sandbox(ctx) if full else Sandbox(None, ctx.run.id)
     try:
-        ddl_text = str(ctx.inputs.get("schema_sql", "")).strip()
-        if not ddl_text:
-            ddl_text = (settings.sample_app_dir / "schema" / "oracle_schema.sql").read_text("utf-8")
-            ctx.emit("Intake", "No schema supplied: validating against the bundled Acme Orders demo schema", "info")
-        seq = iter(range(1, 1000))
-        counter = lambda: f"S{next(seq):03d}"  # noqa: E731
-        ddl_stmts = [Stmt(id=counter(), kind="ddl", file="schema", line=l, label="schema", oracle_sql=t)
-                     for l, t in extract._split_script(ddl_text)]
-        schema = schema_from_ddl([s.oracle_sql for s in ddl_stmts])
-        pipe = StmtPipeline(llm=ctx.llm, sandbox=sandbox, schema=schema,
-                            emit=lambda a, m, l="info", **d: ctx.emit(a, m, l, **d) if a != "Converter" or l != "info" else None,
-                            max_repairs=settings.max_repair_attempts)
-        for s in _order_ddl(ddl_stmts):
-            pipe.run(s)
-        if sandbox.live:
-            live = sandbox.introspect()
-            if live.tables:
-                schema.tables = live.tables
-        pipe.emit = lambda a, m, l="info", **d: ctx.emit(a, m, l, **d)
+        if full:
+            ddl_text = str(ctx.inputs.get("schema_sql", "")).strip()
+            if not ddl_text:
+                ddl_text = (settings.sample_app_dir / "schema" / "oracle_schema.sql").read_text("utf-8")
+                ctx.emit("Intake", "No schema supplied: validating against the bundled Acme Orders demo schema", "info")
+            seq = iter(range(1, 1000))
+            counter = lambda: f"S{next(seq):03d}"  # noqa: E731
+            ddl_stmts = [Stmt(id=counter(), kind="ddl", file="schema", line=l, label="schema", oracle_sql=t)
+                         for l, t in extract._split_script(ddl_text)]
+            schema = schema_from_ddl([s.oracle_sql for s in ddl_stmts])
+            pipe = StmtPipeline(llm=ctx.llm, sandbox=sandbox, schema=schema,
+                                emit=lambda a, m, l="info", **d: ctx.emit(a, m, l, **d) if a != "Converter" or l != "info" else None,
+                                max_repairs=settings.max_repair_attempts)
+            for s in _order_ddl(ddl_stmts):
+                pipe.run(s)
+            if sandbox.live:
+                live = sandbox.introspect()
+                if live.tables:
+                    schema.tables = live.tables
+            pipe.emit = lambda a, m, l="info", **d: ctx.emit(a, m, l, **d)
+        else:
+            schema = SchemaInfo()
+            ctx.emit("Validator", f"No live {dialects.label(tgt)} database for this pair: the result is syntax-checked in the "
+                                  f"{dialects.label(tgt)} dialect only", "warn")
+            pipe = GenericPipeline(llm=ctx.llm, src=src, tgt=tgt, emit=lambda a, m, l="info", **d: ctx.emit(a, m, l, **d),
+                                   max_repairs=settings.max_repair_attempts)
 
         kind = extract._kind_for_sql(sql, "jdbc")
         if kind == "jdbc" and not extract.looks_like_sql(sql):
-            raise RuntimeError("That does not look like an Oracle SQL statement or PL/SQL block")
+            raise RuntimeError(f"That does not look like a {sl} SQL statement" + (" or PL/SQL block" if src == "oracle" else ""))
         st = Stmt(id="S001", kind=kind, file="snippet", line=1, label="Pasted snippet", oracle_sql=sql.rstrip().rstrip(";") if kind != "plsql" else sql)
         st.constructs, st.weight = detect(st.oracle_sql, st.kind)
         st.tier = tier_for(st.kind, st.weight)
-        ctx.emit("Discovery", f"Detected {kind}; Oracle constructs: {', '.join(st.constructs) or 'none'}", "ok")
+        ctx.emit("Discovery", f"Detected {kind}" + (f"; Oracle constructs: {', '.join(st.constructs) or 'none'}" if src == "oracle" else ""), "ok")
+        ctx.emit("Platform", "progress", "info", progress=[35, 100])
         pipe.run(st)
+        ctx.emit("Platform", "progress", "info", progress=[70, 100])
         _review(ctx, [st], schema)
+        ctx.emit("Platform", "progress", "info", progress=[95, 100])
         rep = build_report(run_id=ctx.run.id, source_name="Pasted snippet", stmts=[st], findings=[], stats={"files": 0},
-                           sandbox=sandbox, llm=ctx.llm, started=started)
+                           sandbox=sandbox, llm=ctx.llm, started=started, pair=(src, tgt))
         return rep
     finally:
         sandbox.teardown()
@@ -403,28 +450,29 @@ def run_snippet(ctx: RunContext) -> dict[str, Any]:
 # ------------------------------------------------------------------------------------------- registration
 AGENTS = [
     {"name": "Orchestrator", "role": "The supervisor: plans how much of the AI team this project needs, routes work between agents, and triages failures for a second attempt."},
-    {"name": "Discovery", "role": "Finds every SQL statement in Java, MyBatis XML, JPA and SQL files; tags Oracle constructs; scans for prompt injection and unsafe SQL."},
-    {"name": "Code Reader", "role": "Profiles a new Java project (frameworks, build tool, where the SQL lives) and has Claude reconstruct SQL that the code assembles at runtime."},
-    {"name": "Converter", "role": "Rules engine (sqlglot plus custom rewrites) first; Claude only for what the rules cannot do; repair loop on validator errors."},
-    {"name": "Validator", "role": "Plans every converted statement on a real PostgreSQL sandbox (EXPLAIN only, rolled back, time-limited)."},
+    {"name": "Discovery", "role": "Finds every SQL statement in Java, MyBatis XML, JPA and SQL files; tags database-specific constructs; scans for prompt injection and unsafe SQL."},
+    {"name": "Code Reader", "role": "Profiles a new Java project (frameworks, build tool, where the SQL lives) and has the AI reconstruct SQL that the code assembles at runtime."},
+    {"name": "Converter", "role": "Rules engine (sqlglot plus custom rewrites) first; the AI only for what the rules cannot do; repair loop on validator errors."},
+    {"name": "Validator", "role": "Checks every converted statement: planned on a real PostgreSQL sandbox when the target is PostgreSQL (EXPLAIN only, rolled back, time-limited), syntax-checked in the target dialect otherwise."},
     {"name": "Critic", "role": "Diagnoses statements that still fail and gives the Converter a concrete instruction for one more attempt, or hands them to a human."},
-    {"name": "Risk Reviewer", "role": "Flags semantic differences that still run: '' vs NULL, ROWNUM order, DATE time part, concat NULLs, transactions."},
+    {"name": "Risk Reviewer", "role": "Flags semantic differences that still run: NULL vs empty string, row-limit and ordering, date and time types, concatenation with NULL, transactions."},
     {"name": "Report", "role": "Confidence per statement, effort estimate vs manual, application checklist, downloadable report."},
 ]
 
 register(FlowDef(
     id="oracle-java-migration",
-    title="Oracle to PostgreSQL: Java application",
-    tagline="Upload a SQL-heavy Java repo, get converted, validated, risk-ranked SQL",
-    description="Extracts SQL from JDBC strings, MyBatis mappers, JPA native queries and PL/SQL, converts it with a hybrid "
-                "rules + Claude pipeline, validates on a real PostgreSQL sandbox, and reports what still needs a human.",
+    title="Java application converter",
+    tagline="Upload a SQL-heavy Java repo, get converted, checked, risk-ranked SQL",
+    description="Extracts SQL from JDBC strings, MyBatis mappers, JPA native queries and stored procedures, converts it between the two "
+                "databases you pick with a hybrid rules + AI pipeline, checks the result (on a real PostgreSQL sandbox when the target "
+                "is PostgreSQL), and reports what still needs a human.",
     agents=AGENTS,
     inputs=[
         {"name": "source", "type": "choice", "label": "Which application?", "default": "sample",
          "options": [{"value": "upload", "label": "New project: upload a .zip"},
                      {"value": "github", "label": "New project: public GitHub URL"},
-                     {"value": "sample", "label": "Bundled sample app"},
-                     {"value": "sample2", "label": "Bundled sample 2 (SQL built in code)"}]},
+                     {"value": "sample", "label": "Bundled sample app (Oracle)"},
+                     {"value": "sample2", "label": "Bundled sample 2 (Oracle, SQL built in code)"}]},
         {"name": "upload", "type": "file", "label": "Repository zip", "show_when": {"source": "upload"}},
         {"name": "github_url", "type": "text", "label": "GitHub URL", "placeholder": "https://github.com/owner/repo",
          "show_when": {"source": "github"}},
@@ -437,14 +485,14 @@ register(FlowDef(
 
 register(FlowDef(
     id="sql-snippet-converter",
-    title="Oracle SQL / PL/SQL snippet converter",
-    tagline="Paste one statement, get PostgreSQL, a live plan check and the risks",
-    description="The same Converter, Validator and Risk Reviewer agents on a single pasted statement. Optionally paste your DDL so "
-                "the statement is validated against your own tables.",
+    title="SQL snippet converter",
+    tagline="Paste one statement, get it in the other database, checked, with the risks",
+    description="The same Converter, Validator and Risk Reviewer agents on a single pasted statement. For Oracle to PostgreSQL you can "
+                "also paste your DDL so the statement is planned against your own tables.",
     agents=[a for a in AGENTS if a["name"] in ("Converter", "Validator", "Risk Reviewer")],
     inputs=[
-        {"name": "sql", "type": "textarea", "label": "Oracle SQL or PL/SQL", "placeholder": "SELECT ... FROM ... WHERE ROWNUM <= 10"},
-        {"name": "schema_sql", "type": "textarea", "label": "Optional: Oracle DDL for your tables", "optional": True,
+        {"name": "sql", "type": "textarea", "label": "SQL to convert", "placeholder": "SELECT ... FROM ... WHERE ..."},
+        {"name": "schema_sql", "type": "textarea", "label": "Optional: Oracle DDL for your tables (Oracle to PostgreSQL only)", "optional": True,
          "placeholder": "CREATE TABLE ... (leave empty to use the demo schema)"},
     ],
     runner=run_snippet,

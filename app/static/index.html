@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Hub - Oracle to PostgreSQL</title>
+<title>Data Base Converter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -69,6 +69,26 @@ textarea{font-family:var(--mono);font-size:13px;min-height:150px;resize:vertical
 .btn.ghost:hover{border-color:var(--pg);color:var(--pg)}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .err{color:var(--bad);background:#fdeceb;border:1px solid #f0c3bf;padding:10px 12px;border-radius:var(--r);margin-top:12px}
+.pair{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.pair .field{min-width:190px}
+.pair select{width:100%;padding:9px 10px;border:1px solid var(--rule);border-radius:var(--r);background:#fbfcfd}
+.pair .arrow{padding-bottom:10px;color:var(--muted);font-size:20px}
+.pair-note{font-size:13px;color:var(--muted);margin-top:6px}
+.sec-head{font-size:20px;font-weight:700;margin:0;letter-spacing:-.01em}
+details.sec{margin:0 0 22px;border:1px solid var(--rule);border-radius:var(--r);background:var(--panel)}
+details.sec>summary{cursor:pointer;padding:12px 16px;list-style:none;display:flex;align-items:center;gap:10px}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary::before{content:"";width:8px;height:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+details.sec[open]>summary::before{transform:rotate(45deg)}
+details.sec .agents{margin:0;padding:0 16px 14px}
+.runprog{display:none;margin-top:4px}
+.runprog.on{display:block}
+.runprog .top{display:flex;justify-content:space-between;gap:12px;font-size:13.5px;color:var(--muted);margin-bottom:4px}
+.runprog .bar{margin:0;height:8px}
+.runprog .bar i{display:block;height:100%;background:var(--pg);width:0;transition:width .35s ease}
+.runprog.fail .bar i{background:var(--bad)}
+.runprog.done .bar i{background:var(--ok)}
+.results-head{margin:0 0 12px}
 /* ---------- live log ---------- */
 .run{margin-top:26px;display:grid;gap:24px}
 .log{max-height:340px;overflow:auto;font-size:14px;border-top:1px solid var(--rule-soft)}
@@ -146,17 +166,24 @@ details.box summary{cursor:pointer;font-weight:500}
 <body>
 <div class="app">
   <aside class="rail" aria-label="Flows">
-    <div class="brand">Agent Hub<small>Oracle to PostgreSQL migration agents</small></div>
+    <div class="brand">Data Base Converter</div>
     <nav class="flows" id="flows" aria-label="Choose a flow"></nav>
-    <div class="status" id="status" aria-live="polite"></div>
   </aside>
 
   <main id="main">
     <h1 id="flow-title">Loading</h1>
     <p class="lead" id="flow-desc"></p>
-    <ul class="agents" id="agents"></ul>
+    <details class="sec" id="agents-sec" open><summary><h2 class="sec-head">Agents in this workflow</h2></summary><ul class="agents" id="agents"></ul></details>
 
     <form class="panel composer" id="composer">
+      <div>
+        <div class="pair" role="group" aria-label="Databases">
+          <div class="field"><label for="source_db">Convert from</label><select id="source_db"></select></div>
+          <div class="arrow" aria-hidden="true">&rarr;</div>
+          <div class="field"><label for="target_db">Convert to</label><select id="target_db"></select></div>
+        </div>
+        <div class="pair-note" id="pair-note" aria-live="polite"></div>
+      </div>
       <div id="inputs"></div>
       <details class="box" id="ai-box" open>
         <summary id="ai-summary">AI connection</summary>
@@ -181,13 +208,14 @@ details.box summary{cursor:pointer;font-weight:500}
           <div class="row" style="margin:0"><select id="llm_model"></select><input type="text" id="copilot_model" list="copilot-models" class="hidden" autocomplete="off" spellcheck="false" placeholder="auto"><datalist id="copilot-models"></datalist><button type="button" class="btn ghost" id="ai-test">Test connection</button><span class="hint" id="ai-test-msg" aria-live="polite"></span></div></div>
       </details>
       <div class="row"><button class="btn" id="run" type="submit">Run analysis</button><span class="hint" id="run-hint"></span></div>
+      <div class="runprog" id="runprog" aria-live="polite"><div class="top"><span id="prog-label">Starting...</span><span id="prog-pct">0%</span></div>
+        <div class="bar" role="progressbar" aria-label="Conversion progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="prog-bar"><i id="progress"></i></div></div>
       <div class="err hidden" id="error" role="alert"></div>
     </form>
 
     <section class="run hidden" id="run-area" aria-label="Run">
       <div class="panel">
         <h2 id="run-title">Agents at work</h2>
-        <div class="bar" role="progressbar" aria-label="Progress"><i id="progress"></i></div>
         <div class="log" id="log" aria-live="polite"></div>
       </div>
       <div id="results" class="hidden"></div>
@@ -213,16 +241,10 @@ let CONFIG = {}, FLOWS = [], current = null, report = null, es = null, selectedI
 
 async function boot() {
   [CONFIG, FLOWS] = await Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/flows").then(r => r.json())]);
-  renderStatus(); renderFlowButtons();
+  renderFlowButtons();
+  initPair();
   initAI();
   selectFlow(FLOWS[0].id);
-}
-function renderStatus() {
-  const sk = CONFIG.server_keys || { anthropic: CONFIG.llm_configured, copilot: false }, llm = sk.anthropic || sk.copilot, db = CONFIG.database_configured;
-  const which = [sk.anthropic ? "Claude" : "", sk.copilot ? "GitHub Copilot" : ""].filter(Boolean).join(" + ");
-  $("#status").innerHTML =
-    `<div><span class="dot ${llm ? "on" : "off"}"></span><span>${llm ? "Server credential set: " + esc(which) : "No server credential: use your own key/token or run rules-only"}</span></div>` +
-    `<div><span class="dot ${db ? "on" : "off"}"></span><span>${db ? "PostgreSQL sandbox connected" : "No sandbox database: syntax-only checks"}</span></div>`;
 }
 function provider() { const r = document.querySelector("#ai-provider input:checked"); return r ? r.value : "anthropic"; }
 function modelValue() { return provider() === "copilot" ? $("#copilot_model").value.trim() : $("#llm_model").value; }
@@ -265,6 +287,31 @@ function initAI() {
   };
 }
 function aiMode() { const r = document.querySelector("#ai-mode input:checked"); return r ? r.value : "none"; }
+const dl_ = () => CONFIG.dialects;
+const dname = id => (dl_().list.find(d => d.id === id) || {}).label || id;
+const isFull = () => $("#source_db").value === dl_().full_pair[0] && $("#target_db").value === dl_().full_pair[1];
+function initPair() {
+  const opts = dl_().list.map(d => `<option value="${esc(d.id)}">${esc(d.label)}</option>`).join("");
+  $("#source_db").innerHTML = opts; $("#target_db").innerHTML = opts;
+  $("#source_db").value = dl_().default_source; $("#target_db").value = dl_().default_target;
+  $("#source_db").onchange = () => updatePair("source"); $("#target_db").onchange = () => updatePair("target");
+  updatePair();
+}
+function updatePair(changed) {
+  const src = $("#source_db"), tgt = $("#target_db");
+  if (src.value === tgt.value) {  // never allow the same database on both sides: move the one the user did not just touch
+    const other = changed === "target" ? src : tgt;
+    other.value = (dl_().list.find(d => d.id !== (changed === "target" ? tgt.value : src.value)) || {}).id;
+  }
+  const full = isFull();
+  $("#pair-note").textContent = full
+    ? "Full pipeline: rules + AI, checked by running EXPLAIN on a real PostgreSQL sandbox."
+    : `${dname(src.value)} to ${dname(tgt.value)}: rules + AI, then a syntax check in the ${dname(tgt.value)} dialect. There is no live ${dname(tgt.value)} database, so results are marked "review", never "validated".`;
+  if (current) { updateTitle(); renderInputs(); }
+}
+function updateTitle() {
+  $("#flow-title").textContent = `${current.title}: ${dname($("#source_db").value)} to ${dname($("#target_db").value)}`;
+}
 function renderFlowButtons() {
   $("#flows").innerHTML = FLOWS.map(f => `<button class="flow-btn" data-id="${f.id}"><b>${esc(f.title)}</b><span>${esc(f.tagline)}</span></button>`).join("");
   $("#flows").onclick = e => { const b = e.target.closest(".flow-btn"); if (b) selectFlow(b.dataset.id); };
@@ -272,38 +319,48 @@ function renderFlowButtons() {
 function selectFlow(id) {
   current = FLOWS.find(f => f.id === id);
   document.querySelectorAll(".flow-btn").forEach(b => b.setAttribute("aria-current", b.dataset.id === id));
-  $("#flow-title").textContent = current.title;
   $("#flow-desc").textContent = current.description;
+  updateTitle();
   $("#agents").innerHTML = current.agents.map(a => `<li style="--c:${AGENT_COLOR[a.name] || "#778"}" title="${esc(a.role)}"><span><b>${esc(a.name)}</b> ${esc(a.role.split(";")[0].split(".")[0])}</span></li>`).join("");
   renderInputs();
   $("#run-area").classList.add("hidden"); $("#error").classList.add("hidden");
   if (es) { es.close(); es = null; }
 }
 function renderInputs() {
-  const box = $("#inputs"); box.innerHTML = "";
+  const box = $("#inputs");
+  const keep = {};  // typed values survive a change of database pair
+  box.querySelectorAll("input[type=text],input[type=password],textarea").forEach(el => keep[el.name] = el.value);
+  const keepRadio = {}; box.querySelectorAll("input[type=radio]:checked").forEach(r => keepRadio[r.name] = r.value);
+  box.innerHTML = "";
   box.style.display = "grid"; box.style.gap = "16px";
   current.inputs.forEach(inp => {
     const wrap = document.createElement("div"); wrap.className = "field"; wrap.dataset.name = inp.name;
     if (inp.show_when) wrap.dataset.when = JSON.stringify(inp.show_when);
+    if (inp.name === "schema_sql" && !isFull()) return;  // the DDL box only helps the PostgreSQL plan check
     if (inp.type === "choice") {
+      const oracleSrc = $("#source_db").value === "oracle";
+      const opts = inp.options.filter(o => oracleSrc || !String(o.value).startsWith("sample"));  // bundled samples are Oracle apps
+      const want = opts.some(o => o.value === keepRadio[inp.name]) ? keepRadio[inp.name] : (opts.some(o => o.value === inp.default) ? inp.default : opts[0].value);
       wrap.innerHTML = `<span class="lab">${esc(inp.label)}</span><div class="seg" role="radiogroup">` +
-        inp.options.map(o => `<label><input type="radio" name="${inp.name}" value="${o.value}" ${o.value === inp.default ? "checked" : ""}><span>${esc(o.label)}</span></label>`).join("") + `</div>`;
+        opts.map(o => `<label><input type="radio" name="${inp.name}" value="${o.value}" ${o.value === want ? "checked" : ""}><span>${esc(o.label)}</span></label>`).join("") + `</div>`;
     } else if (inp.type === "file") {
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="file" id="f_${inp.name}" name="${inp.name}" accept=".zip"><div class="hint">Up to ${CONFIG.limits.upload_mb} MB. Only Java, XML, SQL and config files are read; nothing is executed.</div>`;
     } else if (inp.type === "secret") {
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="password" autocomplete="off" spellcheck="false" id="f_${inp.name}" name="${inp.name}"><div class="hint">${esc(inp.hint || "")}</div>`;
     } else if (inp.type === "textarea") {
-      const ex = inp.name === "sql" ? `<div class="chips" id="examples">${EXAMPLES.map((e, i) => `<button type="button" class="chip" data-i="${i}">${esc(e[0])}</button>`).join("")}</div>` : "";
+      const ex = inp.name === "sql" && $("#source_db").value === "oracle" ? `<div class="chips" id="examples">${EXAMPLES.map((e, i) => `<button type="button" class="chip" data-i="${i}">${esc(e[0])}</button>`).join("")}</div>` : "";
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label>${ex}<textarea id="f_${inp.name}" name="${inp.name}" placeholder="${esc(inp.placeholder || "")}" ${inp.optional ? "" : "required"}></textarea>`;
     } else {
       wrap.innerHTML = `<label for="f_${inp.name}">${esc(inp.label)}</label><input type="text" id="f_${inp.name}" name="${inp.name}" placeholder="${esc(inp.placeholder || "")}">`;
     }
     box.appendChild(wrap);
+    const k = wrap.querySelector("input[type=text],input[type=password],textarea");
+    if (k && keep[k.name]) k.value = keep[k.name];
   });
   box.onchange = applyVisibility;
   box.onclick = e => { const c = e.target.closest(".chip"); if (c) { $("#f_sql").value = EXAMPLES[+c.dataset.i][1]; } };
   applyVisibility();
-  $("#run-hint").textContent = current.id === "oracle-java-migration" ? "The bundled sample runs in seconds." : "Validated on a real PostgreSQL sandbox.";
+  $("#run-hint").textContent = current.id === "oracle-java-migration" ? (isFull() ? "The bundled sample runs in seconds." : "") : (isFull() ? "Validated on a real PostgreSQL sandbox." : "");
 }
 function applyVisibility() {
   const vals = {};
@@ -316,7 +373,7 @@ function applyVisibility() {
 }
 $("#composer").addEventListener("submit", async e => {
   e.preventDefault();
-  const fd = new FormData(); fd.append("flow_id", current.id);
+  const fd = new FormData(); fd.append("flow_id", current.id); fd.append("source_db", $("#source_db").value); fd.append("target_db", $("#target_db").value);
   document.querySelectorAll("#inputs .field:not(.hidden)").forEach(f => {
     f.querySelectorAll("input,textarea").forEach(el => {
       if (el.type === "radio") { if (el.checked) fd.append(el.name, el.value); }
@@ -327,35 +384,40 @@ $("#composer").addEventListener("submit", async e => {
   const mode = aiMode();
   if (mode === "none") fd.append("no_ai", "1");
   else { fd.append("llm_model", modelValue()); fd.append("llm_provider", provider()); if (mode === "own") fd.append("llm_key", $("#llm_key").value); else fd.append("access_code", $("#access_code").value); }
-  $("#error").classList.add("hidden"); $("#run").disabled = true;
+  $("#error").classList.add("hidden"); $("#run").disabled = true; setProgress(0, "Starting...");
   try {
     const r = await fetch("/api/runs", { method: "POST", body: fd });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.detail || "The run could not be started");
     startStream(j.run_id);
-  } catch (err) { showError(err.message); $("#run").disabled = false; }
+  } catch (err) { showError(err.message); $("#run").disabled = false; $("#runprog").classList.remove("on"); }
 });
+function setProgress(pct, label, state) {
+  const box = $("#runprog"); box.classList.add("on"); box.classList.toggle("fail", state === "fail"); box.classList.toggle("done", state === "done");
+  $("#progress").style.width = pct + "%"; $("#prog-pct").textContent = pct + "%"; $("#prog-bar").setAttribute("aria-valuenow", pct);
+  if (label) $("#prog-label").textContent = label;
+}
 function showError(m) { const e = $("#error"); e.textContent = m; e.classList.remove("hidden"); }
 
 function startStream(runId) {
   report = null; selectedId = null;
   $("#run-area").classList.remove("hidden"); $("#results").classList.add("hidden"); $("#results").innerHTML = "";
-  $("#log").innerHTML = ""; $("#progress").style.width = "4%"; $("#run-title").textContent = "Agents at work";
-  $("#run-area").scrollIntoView({ block: "start" });
+  $("#log").innerHTML = ""; setProgress(1, "Starting..."); $("#run-title").textContent = "Agents at work";
   es = new EventSource(`/api/runs/${runId}/events`);
   es.onmessage = m => addEvent(JSON.parse(m.data));
   es.addEventListener("end", async m => {
     es.close(); es = null; $("#run").disabled = false;
     const end = JSON.parse(m.data);
-    if (end.status === "error") { showError(end.error || "The run failed"); $("#progress").style.width = "100%"; return; }
-    $("#progress").style.width = "100%"; $("#run-title").textContent = "Agents finished";
+    if (end.status === "error") { showError(end.error || "The run failed"); setProgress(parseInt($("#prog-pct").textContent) || 0, "Stopped: the run failed", "fail"); return; }
+    setProgress(100, "Done", "done"); $("#run-title").textContent = "Agents finished";
     report = await fetch(`/api/runs/${runId}/result`).then(r => r.json()); report._runId = runId;
     renderReport();
   });
   es.onerror = () => { if (es && es.readyState === 2) { $("#run").disabled = false; } };
 }
 function addEvent(ev) {
-  if (ev.data && ev.data.progress) { const [d, t] = ev.data.progress; $("#progress").style.width = (8 + 88 * d / t) + "%"; return; }
+  if (ev.data && ev.data.progress) { const [d, t] = ev.data.progress; setProgress(Math.min(99, Math.round(100 * d / t))); return; }
+  if (ev.level === "stage") $("#prog-label").textContent = `${ev.agent}: ${ev.message}`.slice(0, 110);
   const log = $("#log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
   const d = document.createElement("div"); d.className = `ev lvl-${ev.level}`;
   d.innerHTML = `<span class="ag" style="--c:${AGENT_COLOR[ev.agent] || "#556"}">${esc(ev.agent)}</span><span class="msg">${esc(ev.message)}</span>`;
@@ -363,6 +425,7 @@ function addEvent(ev) {
 }
 
 /* ---------------- results ---------------- */
+const FILTERS = [["all", "All"], ["auto", "Converted"], ["review", "Needs review"], ["manual", "Needs manual work"], ["portable", "Portable"]];
 const STATUS_LABEL = { auto: "Converted and validated", portable: "Portable as-is", review: "Needs review", manual: "Needs manual work" };
 function renderReport() {
   const s = report.summary, m = report.meta, st = report.statements;
@@ -388,7 +451,9 @@ function renderReport() {
       ${orch.plan.focus.length ? `<p class="hint">Risk Reviewer focus: ${orch.plan.focus.map(esc).join("; ")}</p>` : ""}
       <div class="trace">${orch.trace.map(t => `<b>${esc(t.agent)}</b><span>${esc(t.decision)}${t.reason ? ` <span class="why">- ${esc(t.reason)}</span>` : ""}</span>`).join("")}</div>
     </details>` : "";
+  const pr = m.pair || { source_label: "Oracle", target_label: "PostgreSQL", full: true };
   $("#results").innerHTML = `
+    <h2 class="sec-head results-head" id="results-title">Conversion report: ${esc(pr.source_label)} to ${esc(pr.target_label)}</h2>
     <div class="panel">
       <p class="summary">${esc(report.executive_summary)}</p>
       <div class="ribbon" id="ribbon" role="listbox" aria-label="Statements">${ticks}</div>
@@ -401,13 +466,13 @@ function renderReport() {
           <div class="effort"><div><span>By hand</span><i style="width:100%"></i><span>${e.baseline_hours} h</span></div><div><span>With tool</span><i style="width:${Math.round(100 * e.assisted_hours / max)}%"></i><span>${e.assisted_hours} h</span></div></div></div>
       </div>
       <div class="row"><a class="btn ghost" href="${dl("html")}">Download report (HTML)</a><a class="btn ghost" href="${dl("md")}">Markdown</a><a class="btn ghost" href="${dl("json")}">JSON</a>
-        <span class="hint">${m.llm.available ? "Claude calls: " + m.llm.usage.calls + ", tokens in/out " + m.llm.usage.input_tokens + "/" + m.llm.usage.output_tokens : "Rules-only run (no Claude calls)"} | ${m.duration_s}s</span></div>
+        <span class="hint">${m.llm.available ? "AI calls: " + m.llm.usage.calls + ", tokens in/out " + m.llm.usage.input_tokens + "/" + m.llm.usage.output_tokens : "Rules-only run (no AI calls)"} | ${m.duration_s}s</span></div>
     </div>
     ${orchBox}
     ${profBox}
     ${fnd}
     <div class="split" style="margin-top:20px">
-      <div class="list"><div class="list-head"><div class="chips" id="filters">${["all", "auto", "review", "manual", "portable"].map(k => `<button type="button" class="chip" data-k="${k}" aria-pressed="${k === "all"}">${k === "all" ? "All" : STATUS_LABEL[k].split(" ")[0] === "Converted" ? "Converted" : STATUS_LABEL[k].replace("Needs ", "").replace("Portable as-is", "Portable")}</button>`).join("")}</div><input type="text" id="q" placeholder="Search by name or file" aria-label="Search statements"></div><div id="items"></div></div>
+      <div class="list"><div class="list-head"><div class="chips" id="filters">${FILTERS.map(([k, label]) => `<button type="button" class="chip" data-k="${k}" aria-pressed="${k === "all"}">${label} (${k === "all" ? st.length : st.filter(x => x.status === k).length})</button>`).join("")}</div><input type="text" id="q" placeholder="Search by name or file" aria-label="Search statements"></div><div id="items"></div></div>
       <div class="detail" id="detail"></div>
     </div>
     <details class="box"><summary>Migration checklist for the rest of the application</summary><ul class="plain">${report.checklist.map(c => `<li>${esc(c)}</li>`).join("")}</ul></details>`;
@@ -425,6 +490,7 @@ function renderItems() {
   $("#items").innerHTML = items.map(x => `<button class="item ${x.status}" data-id="${x.id}" aria-current="${x.id === selectedId}"><b>${esc(x.label)}</b><small>${esc(x.kind)} | ${esc(x.file.split("/").pop())}:${x.line} | ${Math.round(x.confidence * 100)}%</small></button>`).join("") || `<div class="item" style="border-left-color:transparent"><small>No statements match this filter.</small></div>`;
   $("#items").onclick = e => { const b = e.target.closest(".item[data-id]"); if (b) select(b.dataset.id, false); };
 }
+const P = () => (report.meta.pair || { source: "oracle", source_label: "Oracle", target_label: "PostgreSQL", full: true });
 function hl(sql) { return esc(sql).replace(ORACLE_TOKENS, m => `<mark class="oc">${m}</mark>`); }
 function select(id, scroll) {
   selectedId = id;
@@ -432,20 +498,20 @@ function select(id, scroll) {
   document.querySelectorAll(".tick").forEach(t => t.setAttribute("aria-selected", t.dataset.id === id));
   document.querySelectorAll("#items .item").forEach(t => t.setAttribute("aria-current", t.dataset.id === id));
   const v = x.validation || {};
-  const vtxt = { ok: v.mode === "postgres" ? "Plans successfully on PostgreSQL" : "Syntax valid (no live PostgreSQL)", inconclusive: "Parses on PostgreSQL; a bind-parameter type could not be inferred", skipped: "Not planned", failed: "Failed validation", pending: "Pending" }[v.status] || v.status;
+  const vtxt = { ok: v.mode === "postgres" ? "Plans successfully on PostgreSQL" : `Syntax valid (no live ${P().target_label})`, inconclusive: P().full ? "Parses on PostgreSQL; a bind-parameter type could not be inferred" : `Parses as ${P().target_label}; not run against a live database`, skipped: "Not planned", failed: "Failed validation", pending: "Pending" }[v.status] || v.status;
   $("#detail").innerHTML = `
     <h2>${esc(x.label)}</h2>
     <div class="meta"><span class="tag ${x.status}">${STATUS_LABEL[x.status] || x.status}</span><span>${esc(x.kind)}</span><span><code>${esc(x.file)}:${x.line}</code></span><span>method: ${esc(x.method)}</span><span>confidence ${Math.round(x.confidence * 100)}%</span><span>about ${x.effort_min} min of human time</span></div>
     <div class="vline ${esc(v.status)}">${esc(vtxt)}${v.error ? ": " + esc(v.error) : ""}</div>
     <div class="diff">
-      <div class="pane src"><h3>Oracle${x.constructs.length ? " (" + x.constructs.length + " Oracle-specific construct" + (x.constructs.length > 1 ? "s" : "") + ")" : ""}</h3><pre>${hl(x.oracle_sql)}</pre></div>
-      <div class="pane dst"><h3>PostgreSQL</h3><pre>${x.pg_sql ? esc(x.pg_sql) : "Not converted. " + (v.error ? esc(v.error) : "")}</pre></div>
+      <div class="pane src"><h3>${esc(P().source_label)}${x.constructs.length && P().source === "oracle" ? " (" + x.constructs.length + " Oracle-specific construct" + (x.constructs.length > 1 ? "s" : "") + ")" : ""}</h3><pre>${P().source === "oracle" ? hl(x.oracle_sql) : esc(x.oracle_sql)}</pre></div>
+      <div class="pane dst"><h3>${esc(P().target_label)}</h3><pre>${x.pg_sql ? esc(x.pg_sql) : "Not converted. " + (v.error ? esc(v.error) : "")}</pre></div>
     </div>
     ${x.notes.length ? `<h3>What changed</h3><ul class="plain">${x.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
-    ${x.llm_explanation ? `<h3 style="margin-top:14px">Claude's explanation</h3><p>${esc(x.llm_explanation)}</p>` : ""}
-    ${x.meta && x.meta.llm_manual_review ? `<div class="vline skipped">Claude asks for manual review: ${esc(x.meta.llm_manual_review)}</div>` : ""}
+    ${x.llm_explanation ? `<h3 style="margin-top:14px">AI explanation</h3><p>${esc(x.llm_explanation)}</p>` : ""}
+    ${x.meta && x.meta.llm_manual_review ? `<div class="vline skipped">The AI asks for manual review: ${esc(x.meta.llm_manual_review)}</div>` : ""}
     <h3 style="margin-top:16px">Behaviour differences to check${x.risks.length ? " (" + x.risks.length + ")" : ""}</h3>
-    ${x.risks.map(r => `<div class="risk ${r.severity}"><b>${esc(r.category)}</b> <span class="hint">${esc(r.severity)}${r.source === "llm" ? ", found by Claude" : ""}</span><div>${esc(r.message)}</div>${r.suggestion ? `<div class="fix">Fix: ${esc(r.suggestion)}</div>` : ""}</div>`).join("") || `<p class="hint">None found for this statement.</p>`}`;
+    ${x.risks.map(r => `<div class="risk ${r.severity}"><b>${esc(r.category)}</b> <span class="hint">${esc(r.severity)}${r.source === "llm" ? ", found by the AI" : ""}</span><div>${esc(r.message)}</div>${r.suggestion ? `<div class="fix">Fix: ${esc(r.suggestion)}</div>` : ""}</div>`).join("") || `<p class="hint">None found for this statement.</p>`}`;
   if (scroll) $("#detail").scrollIntoView({ block: "start", behavior: "smooth" });
 }
 boot();
